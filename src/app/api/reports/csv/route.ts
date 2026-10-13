@@ -1,0 +1,53 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { getSessionUser } from "@/lib/auth/session";
+import { bdoRollup, parsePeriod, peopleBreakdown, periodRange, productTotals } from "@/lib/reports";
+import { ROLE_LABELS } from "@/lib/labels";
+
+const cell = (v: string | number | null | undefined) => {
+  const s = String(v ?? "");
+  // Neutralise spreadsheet formulas and quote when needed.
+  const safe = /^[=+\-@]/.test(s) && !/^-?\d/.test(s) ? `'${s}` : s;
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+};
+const line = (cells: (string | number | null | undefined)[]) => cells.map(cell).join(",");
+
+export async function GET(req: NextRequest) {
+  const me = await getSessionUser();
+  if (!me || me.mustChangePassword) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+  if (me.role === "AGENT") return NextResponse.json({ error: "Not allowed." }, { status: 403 });
+  const period = parsePeriod(req.nextUrl.searchParams.get("period") ?? undefined);
+  const { start, end } = periodRange(period);
+  const [totals, people] = await Promise.all([productTotals(me, start, end), peopleBreakdown(me, start, end)]);
+  const { groups } = await bdoRollup(me, start, end, people);
+  const nameOf = new Map(people.map((p) => [p.id, p.name]));
+  const out = [
+    line(["Switchlink CRM portfolio report"]),
+    line(["From", start.toISOString(), "To (exclusive)", end.toISOString(), "Timezone", "Africa/Nairobi"]),
+    "",
+    line(["Product", "Disbursed (KES)"]),
+    line(["Quick Finance", totals.QUICK_FINANCE]),
+    line(["School Now Pay Later", totals.SNPL]),
+    line(["Salary Advance", totals.SALARY_ADVANCE]),
+    line(["Total", totals.total]),
+    line(["QF draws", totals.qfDraws]),
+    line(["QF cycles", totals.qfCycles.toFixed(2)]),
+    "",
+    line(["BDO totals (including their agents)"]),
+    line(["BDO", "Team", "Agents", "QF (KES)", "QF cycles", "Times hit limit", "SNPL (KES)", "Salary Advance (KES)", "Total (KES)", "New accounts", "Activities"]),
+    ...groups.map((g) =>
+      line([g.bdo.name, g.bdo.teamName, g.agents.length, g.total.qf, g.total.qfCycles.toFixed(2), g.total.limitHits, g.total.snpl, g.total.salaryAdvance, g.total.qf + g.total.snpl + g.total.salaryAdvance, g.total.accountsAdded, g.total.activitiesDone])
+    ),
+    "",
+    line(["Each person"]),
+    line(["Name", "Role", "Reports to", "Team", "QF (KES)", "QF cycles", "Times hit limit", "SNPL (KES)", "Salary Advance (KES)", "Total (KES)", "New accounts", "Activities"]),
+    ...people.map((p) =>
+      line([p.name, ROLE_LABELS[p.role], p.reportsTo ? nameOf.get(p.reportsTo) ?? "" : "", p.teamName, p.qf, p.qfCycles.toFixed(2), p.limitHits, p.snpl, p.salaryAdvance, p.qf + p.snpl + p.salaryAdvance, p.accountsAdded, p.activitiesDone])
+    ),
+  ].join("\n");
+  return new NextResponse(out, {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="switchlink-portfolio-${period}-${new Date().toISOString().slice(0, 10)}.csv"`,
+    },
+  });
+}
