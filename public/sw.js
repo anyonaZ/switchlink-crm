@@ -1,3 +1,4 @@
+/* Switchlink CRM — © 2026 Anyonaz NewTech · SLCRM-ANZ-2026-22618b25b6481b46c0702c9c */
 /* Switchlink CRM service worker: makes the app installable and shows a
    friendly offline page instead of the browser's error when there's no
    signal. Pages themselves are always fetched fresh (no stale data). */

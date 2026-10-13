@@ -5,6 +5,7 @@ import { NAV } from "@/lib/nav";
 import { logout } from "@/lib/actions/auth";
 import { ROLE_LABELS } from "@/lib/labels";
 import { initials } from "@/lib/format";
+import Signature from "@/components/Signature";
 
 export const metadata = { title: "More" };
 
@@ -43,6 +44,7 @@ export default async function MorePage() {
           <LogOut size={18} /> Sign out
         </button>
       </form>
+      <Signature className="text-center text-xs text-slate-400" />
     </div>
   );
 }

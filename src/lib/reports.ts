@@ -3,7 +3,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { getCalendarPeriodRange, getZonedParts, startOfZonedDay } from "@/lib/timezone";
 import { APP_TIMEZONE } from "@/lib/config";
-import type { Actor } from "@/lib/permissions";
+import { sharedWithMe, type Actor } from "@/lib/permissions";
 
 export const PERIODS = [
   { value: "daily", label: "Today" },
@@ -37,7 +37,7 @@ function accountScopeSql(me: Actor, alias = "a"): SQL {
   const a = sql.raw(alias);
   if (me.role === "ADMIN") return sql`true`;
   if (me.role === "TEAM_LEADER") return me.teamId ? sql`${a}.team_id = ${me.teamId}` : sql`false`;
-  if (me.role === "BDO") return sql`(${a}.owner_id = ${me.id} or ${a}.owner_id in (select u2.id from users u2 where u2.reports_to = ${me.id}))`;
+  if (me.role === "BDO") return sql`(${a}.owner_id = ${me.id} or ${a}.owner_id in (select u2.id from users u2 where u2.reports_to = ${me.id}) or ${sharedWithMe(me, sql`${a}.id`)})`;
   return sql`${a}.owner_id = ${me.id}`;
 }
 function peopleScope(me: Actor): SQL {

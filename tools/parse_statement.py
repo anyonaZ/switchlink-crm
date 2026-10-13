@@ -13,6 +13,8 @@ Handles both layouts seen so far:
 
 Usage: parse_statement.py <file.xls>
 Needs: xlrd >= 2.0 (pip install xlrd). Open source, BSD licence.
+
+Part of Switchlink CRM, (c) 2026 Anyonaz NewTech. All rights reserved.
 """
 import datetime as dt
 import json

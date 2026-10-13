@@ -6,7 +6,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * every page and action via requireUser(), so this file is not a security
  * boundary on its own.
  */
-const PUBLIC = ["/login", "/manifest.webmanifest", "/sw.js", "/offline"];
+const PUBLIC = ["/login", "/manifest.webmanifest", "/sw.js", "/offline", "/humans.txt", "/api/signature"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

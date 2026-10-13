@@ -31,7 +31,7 @@ const addPeople = (list: NewPerson[]) =>
 
 // Built top-down so each person can point at who they report to.
 const [admin, joy, sharon] = await addPeople([
-  { name: "Daniel Eshikumo", email: "daniel@test.com", role: "ADMIN", teamId: null },
+  { name: "Daniel Eshikumo", email: "admin@test.com", role: "ADMIN", teamId: null },
   { name: "Joy Nakhumosi", email: "joy@test.com", role: "TEAM_LEADER", teamId: nairobi.id },
   { name: "Sharon Achola", email: "sharon@test.com", role: "TEAM_LEADER", teamId: coast.id },
 ]);
@@ -115,4 +115,4 @@ for (const [i, s] of seeds.entries()) {
   await db.insert(t.contacts).values({ accountId: acc.id, name: "Main contact", phone: s.phone, isDecisionMaker: true });
 }
 await client.end();
-console.log(`Demo data loaded. Sign in as daniel@test.com (Admin), joy@test.com (Team Leader), zaddock@test.com (BDO) or brian@test.com (Agent under Zaddock). Password: ${PASSWORD}`);
+console.log(`Demo data loaded. Sign in as admin@test.com (Admin), joy@test.com (Team Leader), zaddock@test.com (BDO) or brian@test.com (Agent under Zaddock). Password: ${PASSWORD}`);

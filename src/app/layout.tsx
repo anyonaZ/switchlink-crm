@@ -1,10 +1,12 @@
 /**
- * Switchlink CRM — © Anyonaz NewTech. All rights reserved.
+ * Switchlink CRM — © 2026 Anyonaz NewTech. All rights reserved.
  */
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ToastProvider } from "@/components/ui/Toast";
 import RegisterServiceWorker from "@/components/RegisterServiceWorker";
+import SignatureBeacon from "@/components/SignatureBeacon";
+import { AUTHOR, COPYRIGHT, SIGNATURE_ID } from "@/lib/signature";
 
 export const metadata: Metadata = {
   title: { default: "Switchlink CRM", template: "%s · Switchlink CRM" },
@@ -12,6 +14,12 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Switchlink CRM" },
   icons: { icon: "/icons/icon-192.png", apple: "/icons/icon-192.png" },
+  applicationName: "Switchlink CRM",
+  authors: [{ name: AUTHOR }],
+  creator: AUTHOR,
+  publisher: AUTHOR,
+  generator: `Switchlink CRM by ${AUTHOR}`,
+  other: { copyright: COPYRIGHT, "software-signature": SIGNATURE_ID },
 };
 
 export const viewport: Viewport = {
@@ -27,6 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ToastProvider>{children}</ToastProvider>
         <RegisterServiceWorker />
+        <SignatureBeacon />
       </body>
     </html>
   );

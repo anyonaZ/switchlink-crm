@@ -12,6 +12,7 @@ import { getCalendarPeriodRange } from "@/lib/timezone";
 import { APP_TIMEZONE } from "@/lib/config";
 import { bdoRollup, productTotals, periodRange } from "@/lib/reports";
 import { rankLeads } from "@/lib/lead-scoring";
+import { waitingOnMe } from "@/lib/shares";
 
 export const metadata = { title: "Home" };
 
@@ -174,7 +175,7 @@ export default async function Dashboard() {
   }
 
   // Team Leader / Admin
-  const [{ groups }, staleStatements] = await Promise.all([
+  const [{ groups }, staleStatements, shareRequests] = await Promise.all([
     bdoRollup(me, month.start, month.end),
     db.execute<{ id: string; name: string; last: string | null }>(sql`
       select accounts.id, accounts.name, max(su.created_at) as last
@@ -185,6 +186,7 @@ export default async function Dashboard() {
        group by accounts.id, accounts.name
       having max(su.created_at) is null or max(su.created_at) < now() - interval '3 days'
        order by max(su.created_at) nulls first limit 6`),
+    waitingOnMe(me),
   ]);
 
   return (
@@ -193,6 +195,14 @@ export default async function Dashboard() {
         <h1 className="text-xl font-semibold text-ink">Hi {first}</h1>
         <p className="text-sm text-slate-500">{me.role === "ADMIN" ? "Every team" : "Your team"}, this month.</p>
       </div>
+      {shareRequests > 0 && (
+        <Link href="/shares" className="card flex items-center justify-between gap-3 border-amber-200 bg-amber-50 p-4 text-sm active:opacity-70">
+          <span className="font-medium text-amber-900">
+            {shareRequests} corporate sharing request{shareRequests === 1 ? "" : "s"} waiting for your approval
+          </span>
+          <ChevronRight size={18} className="shrink-0 text-amber-700" />
+        </Link>
+      )}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         <Stat label="Disbursed this month" value={formatMoney(totals.total, { dash: false })} href="/reports" />
         <Stat label="Quick Finance" value={formatMoney(totals.QUICK_FINANCE, { dash: false })} href="/reports" />

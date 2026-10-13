@@ -69,6 +69,9 @@ export const statementLineKind = pgEnum("statement_line_kind", [
   "REVERSAL_CHARGE",
   "OTHER",
 ]);
+/** A corporate shared between BDOs: requested, then approved by Team Leader(s) and an Admin. */
+export const shareStatus = pgEnum("share_status", ["PENDING", "APPROVED", "REJECTED", "CANCELLED", "ENDED"]);
+export const approvalDecision = pgEnum("approval_decision", ["PENDING", "APPROVED", "REJECTED"]);
 
 const money = (name: string) => numeric(name, { precision: 14, scale: 2 });
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
@@ -411,6 +414,75 @@ export const statementLines = pgTable(
   ]
 );
 
+// ---------------------------------------------------------------------------
+// Corporate sharing
+// ---------------------------------------------------------------------------
+/**
+ * BDOs who close a corporate together share its disbursements. A request
+ * becomes APPROVED only when every approval slot is approved (one Admin slot
+ * plus one Team Leader slot per team involved). While APPROVED, each
+ * disbursement recorded on the account is split into one ledger row per
+ * BDO by their percentage. At most one PENDING or APPROVED share per account.
+ */
+export const accountShares = pgTable(
+  "account_shares",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    status: shareStatus("status").notNull().default("PENDING"),
+    requestedBy: uuid("requested_by").references(() => users.id, { onDelete: "set null" }),
+    note: text("note"),
+    /** When it became APPROVED, REJECTED or CANCELLED. */
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    endedBy: uuid("ended_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("account_shares_account_idx").on(t.accountId),
+    index("account_shares_status_idx").on(t.status),
+    uniqueIndex("account_shares_one_open_idx").on(t.accountId).where(sql`${t.status} in ('PENDING', 'APPROVED')`),
+  ]
+);
+
+export const accountShareMembers = pgTable(
+  "account_share_members",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shareId: uuid("share_id")
+      .notNull()
+      .references(() => accountShares.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    /** Share of each disbursement, 0.01–99.99. All members add up to 100. */
+    percent: numeric("percent", { precision: 5, scale: 2 }).notNull(),
+    /** The BDO's team when the request was made (decides which Team Leader approves). */
+    teamId: uuid("team_id").references(() => teams.id, { onDelete: "set null" }),
+  },
+  (t) => [uniqueIndex("account_share_members_unique_idx").on(t.shareId, t.userId), index("account_share_members_user_idx").on(t.userId)]
+);
+
+export const accountShareApprovals = pgTable(
+  "account_share_approvals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shareId: uuid("share_id")
+      .notNull()
+      .references(() => accountShares.id, { onDelete: "cascade" }),
+    /** ADMIN, or TEAM_LEADER for `teamId`. */
+    role: userRole("role").notNull(),
+    teamId: uuid("team_id").references(() => teams.id, { onDelete: "set null" }),
+    decision: approvalDecision("decision").notNull().default("PENDING"),
+    decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    reason: text("reason"),
+  },
+  (t) => [index("account_share_approvals_share_idx").on(t.shareId), index("account_share_approvals_pending_idx").on(t.decision, t.role, t.teamId)]
+);
+
 /** One ledger for every product. Never edited: corrections are reversal rows. */
 export const disbursements = pgTable(
   "disbursements",
@@ -434,10 +506,15 @@ export const disbursements = pgTable(
     statementLineId: uuid("statement_line_id").references(() => statementLines.id, { onDelete: "set null" }),
     reversesId: uuid("reverses_id"),
     notes: text("notes"),
+    /** Set when this row is one BDO's slice of a shared-corporate disbursement. */
+    shareId: uuid("share_id").references(() => accountShares.id, { onDelete: "set null" }),
+    /** Every slice of one split disbursement carries the same group id (reversed together). */
+    splitGroupId: uuid("split_group_id"),
     createdAt: createdAt(),
   },
   (t) => [
     index("disbursements_account_idx").on(t.accountId),
+    index("disbursements_split_group_idx").on(t.splitGroupId),
     index("disbursements_credited_idx").on(t.creditedTo, t.disbursedAt),
     index("disbursements_team_idx").on(t.creditedTeamId, t.disbursedAt),
     index("disbursements_bdo_idx").on(t.creditedBdoId, t.disbursedAt),
@@ -470,3 +547,4 @@ export type Activity = typeof activities.$inferSelect;
 export type LocationCapture = typeof locationCaptures.$inferSelect;
 export type Disbursement = typeof disbursements.$inferSelect;
 export type StatementUpload = typeof statementUploads.$inferSelect;
+export type AccountShare = typeof accountShares.$inferSelect;

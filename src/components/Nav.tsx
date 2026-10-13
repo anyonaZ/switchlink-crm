@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { logout } from "@/lib/actions/auth";
 import { NAV, type Role } from "@/lib/nav";
+import Signature from "@/components/Signature";
 
 const isActive = (path: string, href: string) => path === href || path.startsWith(href + "/");
 
@@ -61,6 +62,7 @@ export function Sidebar({ role, name, roleLabel }: { role: Role; name: string; r
             </button>
           </form>
         </div>
+        <Signature className="mt-3 text-[11px] leading-tight text-slate-400" />
       </div>
     </aside>
   );
@@ -93,7 +95,7 @@ export function BottomNav() {
           </Link>
         </div>
         {slot("/follow-ups", "Follow-ups", CalendarCheck)}
-        {slot("/more", "More", Menu, ["/more", "/pipeline", "/statements", "/locations", "/reports", "/users", "/teams", "/change-password"])}
+        {slot("/more", "More", Menu, ["/more", "/pipeline", "/shares", "/statements", "/locations", "/reports", "/users", "/teams", "/change-password"])}
       </div>
     </nav>
   );

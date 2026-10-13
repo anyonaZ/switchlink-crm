@@ -11,6 +11,10 @@ import { recordDisbursement, reverseDisbursement, setQfLimit, uploadKycDocument 
 import { ACTIVITY_LABELS, ACTIVITY_TYPES, PRODUCTS_FOR_KIND, PRODUCT_LABELS, ROLE_LABELS, STAGE_LABELS, STATUS_LABELS, type Stage } from "@/lib/labels";
 import { formatDate, formatDateTime, formatMoney, formatShortDate, todayYmd } from "@/lib/format";
 import { shortAddress } from "@/lib/geo/geocode";
+import ShareCard from "@/components/ShareCard";
+import ShareRequestForm from "@/components/ShareRequestForm";
+import { requestShare } from "@/lib/actions/shares";
+import type { ShareView } from "@/lib/shares";
 
 type Product = keyof typeof PRODUCT_LABELS;
 type Status = keyof typeof STATUS_LABELS;
@@ -35,6 +39,7 @@ export function OverviewTab({
   history,
   statusOptions,
   reassignTo,
+  sharing,
 }: {
   acc: Account;
   ownerName: string | null;
@@ -45,6 +50,7 @@ export function OverviewTab({
   history: { id: string; from: Status | null; to: Status; at: Date; note: string | null; by: string | null }[];
   statusOptions: Status[];
   reassignTo: { id: string; name: string; role: keyof typeof ROLE_LABELS }[];
+  sharing: SharingInfo | null;
 }) {
   const flow = (acc.kind === "MERCHANT" ? ["ONGOING_ENGAGEMENT", "DOCUMENT_COLLECTION", "ACTIVE"] : ["ONGOING_ENGAGEMENT", "ACTIVE"]) as Status[];
   const step = flow.indexOf(acc.status);
@@ -206,6 +212,8 @@ export function OverviewTab({
         </Sheet>
       )}
 
+      {sharing && <SharingSection info={sharing} accountId={acc.id} />}
+
       <Section title="Status history">
         {history.length === 0 ? (
           <Empty>No changes yet.</Empty>
@@ -231,6 +239,45 @@ export function OverviewTab({
         )}
       </Section>
     </div>
+  );
+}
+
+// --- Corporate sharing ------------------------------------------------------
+export interface SharingInfo {
+  me: { id: string; name: string; isAdmin: boolean };
+  shares: ShareView[];
+  /** BDOs this person can ask to share with (null if they can't ask at all). */
+  requestTo: { id: string; name: string; teamName: string | null }[] | null;
+  /** False while a request is open or the corporate is already shared. */
+  canRequestNow: boolean;
+}
+function SharingSection({ info, accountId }: { info: SharingInfo; accountId: string }) {
+  const open = info.shares.filter((s) => s.status === "PENDING" || s.status === "APPROVED");
+  const past = info.shares.filter((s) => s.status !== "PENDING" && s.status !== "APPROVED").slice(0, 3);
+  if (!open.length && !past.length && !info.requestTo) return null;
+  return (
+    <Section title="Shared corporate" subtitle="BDOs who closed this corporate together split its disbursements.">
+      {open.map((s) => (
+        <ShareCard key={s.id} share={s} meId={info.me.id} isAdmin={info.me.isAdmin} />
+      ))}
+      {!open.length && !info.requestTo && <Empty>This corporate isn&apos;t shared.</Empty>}
+      {/* Stays mounted after sending (button hidden) so the form can still show its result. */}
+      {info.requestTo && (
+        <Sheet title="Share this corporate" trigger="Share with other BDOs" triggerClassName={info.canRequestNow ? "btn-secondary w-full" : "hidden"}>
+          <ShareRequestForm action={requestShare.bind(null, accountId)} me={info.me} bdos={info.requestTo} />
+        </Sheet>
+      )}
+      {past.length > 0 && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-slate-500">Earlier requests ({past.length})</summary>
+          <div className="mt-2 space-y-2">
+            {past.map((s) => (
+              <ShareCard key={s.id} share={s} meId={info.me.id} isAdmin={info.me.isAdmin} />
+            ))}
+          </div>
+        </details>
+      )}
+    </Section>
   );
 }
 
@@ -633,18 +680,31 @@ export function MoneyTab({
   creditOptions,
   canSetLimit,
   isAdmin,
+  share,
 }: {
   acc: Account;
-  disbursements: { d: { id: string; product: Product; amount: string; disbursedAt: Date; source: "MANUAL" | "STATEMENT"; notes: string | null; reversesId: string | null }; creditedName: string | null }[];
+  disbursements: {
+    d: { id: string; product: Product; amount: string; disbursedAt: Date; source: "MANUAL" | "STATEMENT"; notes: string | null; reversesId: string | null; splitGroupId: string | null };
+    creditedName: string | null;
+  }[];
   limits: { l: { id: string; amount: string; effectiveFrom: Date; note: string | null }; by: string | null }[];
   currentLimit: number | null;
   uploads: StatementUpload[];
   creditOptions: { id: string; name: string; role: string }[];
   canSetLimit: boolean;
   isAdmin: boolean;
+  share: ShareView | null;
 }) {
   const isQf = acc.kind === "MERCHANT" || acc.kind === "INDIVIDUAL";
   const reversed = new Set(disbursements.map((x) => x.d.reversesId).filter(Boolean));
+  // A split disbursement shows one row per BDO but one Reverse button for the whole split.
+  const firstOfGroup = new Set<string>();
+  const seenGroups = new Set<string>();
+  for (const { d } of disbursements) {
+    if (!d.splitGroupId || Number(d.amount) <= 0 || seenGroups.has(d.splitGroupId)) continue;
+    seenGroups.add(d.splitGroupId);
+    firstOfGroup.add(d.id);
+  }
   const monthStart = todayYmd().slice(0, 7);
   const thisMonth = disbursements.filter((x) => formatYm(x.d.disbursedAt) === monthStart);
   const qfMonth = thisMonth.filter((x) => x.d.product === "QUICK_FINANCE").reduce((s, x) => s + Number(x.d.amount), 0);
@@ -714,15 +774,29 @@ export function MoneyTab({
               <Field label="Date disbursed" name="disbursed_on">
                 <input id="disbursed_on" name="disbursed_on" type="date" required defaultValue={todayYmd()} className="input" />
               </Field>
-              <Field label="Credit to" name="credited_to">
-                <select id="credited_to" name="credited_to" className="input" defaultValue={acc.ownerId && creditOptions.some((o) => o.id === acc.ownerId) ? acc.ownerId : creditOptions[0].id}>
-                  {creditOptions.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name} ({ROLE_LABELS[o.role as keyof typeof ROLE_LABELS]})
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              {share ? (
+                <div className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900">
+                  <p className="font-medium">Split automatically (shared corporate)</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {share.members.map((m) => (
+                      <li key={m.userId} className="flex justify-between gap-2">
+                        <span>{m.name}</span>
+                        <span className="tabular-nums">{m.percent}%</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <Field label="Credit to" name="credited_to">
+                  <select id="credited_to" name="credited_to" className="input" defaultValue={acc.ownerId && creditOptions.some((o) => o.id === acc.ownerId) ? acc.ownerId : creditOptions[0].id}>
+                    {creditOptions.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.name} ({ROLE_LABELS[o.role as keyof typeof ROLE_LABELS]})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <Field label="Note (optional)" name="notes">
                 <input id="notes" name="notes" className="input" />
               </Field>
@@ -782,13 +856,18 @@ export function MoneyTab({
                       <span className={`font-medium tabular-nums ${amt < 0 ? "text-red-700" : "text-ink"}`}>{formatMoney(amt, { dash: false })}</span>
                     </p>
                     <p className="mt-0.5 truncate text-xs text-slate-500">
-                      {formatDate(d.disbursedAt)} · {creditedName ?? "No one"} · {d.source === "STATEMENT" ? "statement" : "manual"}
+                      {formatDate(d.disbursedAt)} · {creditedName ?? "No one"}
+                      {d.splitGroupId ? "" : d.source === "STATEMENT" ? " · statement" : " · manual"}
                       {d.notes ? ` · ${d.notes}` : ""}
                     </p>
                   </div>
-                  {d.source === "MANUAL" && amt > 0 && !reversed.has(d.id) && creditOptions.length > 0 && (
-                    <ActionButton run={reverseDisbursement.bind(null, d.id)} prompt="Why is this being reversed?" className="btn-ghost btn-sm px-2 text-xs text-slate-500">
-                      Reverse
+                  {d.source === "MANUAL" && amt > 0 && !reversed.has(d.id) && creditOptions.length > 0 && (!d.splitGroupId || firstOfGroup.has(d.id)) && (
+                    <ActionButton
+                      run={reverseDisbursement.bind(null, d.id)}
+                      prompt={d.splitGroupId ? "This reverses the whole split, for every BDO. Why is it being reversed?" : "Why is this being reversed?"}
+                      className="btn-ghost btn-sm px-2 text-xs text-slate-500"
+                    >
+                      {d.splitGroupId ? "Reverse split" : "Reverse"}
                     </ActionButton>
                   )}
                 </li>

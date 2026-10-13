@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import ActionForm, { Field, Submit } from "@/components/ui/ActionForm";
 import { login } from "@/lib/actions/auth";
 import { getSessionUser } from "@/lib/auth/session";
+import Signature from "@/components/Signature";
 
 export const metadata = { title: "Sign in" };
 
@@ -34,6 +35,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           </ActionForm>
         </div>
         <p className="mt-6 text-center text-xs text-brand-200">Forgot your password? Ask your Team Leader or Admin to reset it.</p>
+        <Signature className="mt-8 text-center text-[11px] text-brand-300" />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import "server-only";
 import { notFound } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db, t } from "@/lib/db";
 import { canViewAccount, type Actor, type PersonRef } from "@/lib/permissions";
@@ -24,7 +24,17 @@ async function accountWithLine(id: string) {
     .from(t.accounts)
     .leftJoin(owner, eq(owner.id, t.accounts.ownerId))
     .where(eq(t.accounts.id, id));
-  return row ? { ...row.acc, ownerReportsTo: row.ownerReportsTo } : null;
+  if (!row) return null;
+  // BDOs on an approved corporate share can see and work the account too.
+  const shared =
+    row.acc.kind === "CORPORATE"
+      ? await db
+          .select({ userId: t.accountShareMembers.userId })
+          .from(t.accountShareMembers)
+          .innerJoin(t.accountShares, eq(t.accountShares.id, t.accountShareMembers.shareId))
+          .where(and(eq(t.accountShares.accountId, id), eq(t.accountShares.status, "APPROVED")))
+      : [];
+  return { ...row.acc, ownerReportsTo: row.ownerReportsTo, sharedWith: shared.map((s) => s.userId) };
 }
 
 /** The account if this person may see it; otherwise a 404 (never reveals that it exists). */

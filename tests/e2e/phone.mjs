@@ -155,7 +155,7 @@ const noHorizontalScroll = async (page, name) => {
 // ---------------- Admin: statements and money ----------------
 {
   const page = await phone();
-  await login(page, "daniel@test.com");
+  await login(page, "admin@test.com");
   await page.goto(`${BASE}/statements`);
   await page.setInputFiles("#file", `${STMTS}/second.xls`);
   await page.click("button[type=submit]");
@@ -244,7 +244,7 @@ const noHorizontalScroll = async (page, name) => {
 // ---------------- Admin ----------------
 {
   const page = await phone();
-  await login(page, "daniel@test.com");
+  await login(page, "admin@test.com");
   await page.goto(`${BASE}/users`);
   await shot(page, "15-admin-people", true);
   await noHorizontalScroll(page, "people");
@@ -253,7 +253,7 @@ const noHorizontalScroll = async (page, name) => {
   const desktop = await browser.newContext({ viewport: { width: 1280, height: 860 } });
   const d = await desktop.newPage();
   await d.goto(`${BASE}/login`);
-  await d.fill("#email", "daniel@test.com");
+  await d.fill("#email", "admin@test.com");
   await d.fill("#password", "Switchlink2026!");
   await Promise.all([d.waitForURL(/dashboard/), d.click("button[type=submit]")]);
   await d.screenshot({ path: `${OUT}16-desktop-dashboard.png` });

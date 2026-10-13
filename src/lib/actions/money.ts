@@ -1,11 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, eq, gt } from "drizzle-orm";
 import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { findAccountFor, loadPerson } from "@/lib/access";
-import { bdoFor, canEditAccount, canManageQf, canRecordDisbursement } from "@/lib/permissions";
+import { bdoFor, canEditAccount, canManageQf, canRecordDisbursement, splitAmount } from "@/lib/permissions";
+import { activeShare } from "@/lib/shares";
 import { audit } from "@/lib/audit";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { PRODUCTS_FOR_KIND, PRODUCT_LABELS } from "@/lib/labels";
@@ -67,14 +69,53 @@ export async function recordDisbursement(accountId: string, _prev: ActionResult 
   const when = nairobiToInstant(String(f.get("disbursed_on") ?? ""), "12:00");
   if (!when || when.getTime() > Date.now() + 86400000) return fail("Pick the disbursement date (not in the future).", { disbursed_on: "Required" });
 
-  const creditedTo = await loadPerson(str(f, "credited_to") ?? acc.ownerId);
-  if (!creditedTo) return fail("Choose who this disbursement is credited to.", { credited_to: "Required" });
   if (!canRecordDisbursement(me)) return fail("Only Admins record disbursements.");
   const [opp] = await db
     .select({ id: t.opportunities.id })
     .from(t.opportunities)
     .where(and(eq(t.opportunities.accountId, accountId), eq(t.opportunities.product, product as "SNPL")));
+  const label = PRODUCT_LABELS[product as "SNPL"];
+  const notes = str(f, "notes");
 
+  // A shared corporate: split the amount between the BDOs on the approved share.
+  const share = acc.kind === "CORPORATE" ? await activeShare(accountId) : null;
+  if (share) {
+    const owner = await loadPerson(acc.ownerId);
+    const slices = splitAmount(amount, share.members);
+    const people = await Promise.all(slices.map((x) => loadPerson(x.userId)));
+    const groupId = randomUUID();
+    const rows = slices.map((x, i) => {
+      const bdo = people[i]!;
+      // The owning Agent keeps the credit for their BDO's slice, as with any other account.
+      const credited = owner && owner.role === "AGENT" && owner.reportsTo === bdo.id ? owner : bdo;
+      const pct = share.members.find((m) => m.userId === bdo.id)!.percent;
+      return {
+        accountId,
+        opportunityId: opp?.id ?? null,
+        product: product as "SNPL",
+        amount: x.amount.toFixed(2),
+        disbursedAt: when,
+        creditedTo: credited.id,
+        creditedBdoId: bdo.id,
+        creditedTeamId: credited.teamId,
+        createdBy: me.id,
+        source: "MANUAL" as const,
+        shareId: share.id,
+        splitGroupId: groupId,
+        notes: [`Shared ${pct}% of KES ${amount.toLocaleString("en-KE")}`, notes].filter(Boolean).join(" · ").slice(0, 500),
+      };
+    });
+    await db.transaction(async (tx) => {
+      await tx.insert(t.disbursements).values(rows);
+      await audit(me.id, "disbursement.record_split", "account", accountId, { amount, product, shareId: share.id, splitGroupId: groupId, slices }, tx);
+    });
+    touch(accountId);
+    const who = slices.map((x, i) => `${people[i]!.name} KES ${x.amount.toLocaleString("en-KE")}`).join(", ");
+    return ok(`${label} disbursement of KES ${amount.toLocaleString("en-KE")} split between the BDOs sharing this corporate: ${who}.`);
+  }
+
+  const creditedTo = await loadPerson(str(f, "credited_to") ?? acc.ownerId);
+  if (!creditedTo) return fail("Choose who this disbursement is credited to.", { credited_to: "Required" });
   const [row] = await db
     .insert(t.disbursements)
     .values({
@@ -88,12 +129,12 @@ export async function recordDisbursement(accountId: string, _prev: ActionResult 
       creditedTeamId: creditedTo.teamId,
       createdBy: me.id,
       source: "MANUAL",
-      notes: str(f, "notes"),
+      notes,
     })
     .returning({ id: t.disbursements.id });
   await audit(me.id, "disbursement.record", "disbursement", row.id, { accountId, amount, product, creditedTo: creditedTo.id });
   touch(accountId);
-  return ok(`${PRODUCT_LABELS[product as "SNPL"]} disbursement of KES ${amount.toLocaleString("en-KE")} recorded for ${creditedTo.name}.`);
+  return ok(`${label} disbursement of KES ${amount.toLocaleString("en-KE")} recorded for ${creditedTo.name}.`);
 }
 
 /** Corrections never edit the ledger: they add an equal negative row. */
@@ -107,23 +148,36 @@ export async function reverseDisbursement(disbursementId: string, reason = ""): 
   const [already] = await db.select({ id: t.disbursements.id }).from(t.disbursements).where(eq(t.disbursements.reversesId, d.id));
   if (already) return fail("This entry has already been reversed.");
   if (!reason.trim()) return fail("Give a reason for the reversal.");
-  await db.insert(t.disbursements).values({
-    accountId: d.accountId,
-    opportunityId: d.opportunityId,
-    product: d.product,
-    amount: (-Number(d.amount)).toFixed(2),
-    disbursedAt: d.disbursedAt,
-    creditedTo: d.creditedTo,
-    creditedBdoId: d.creditedBdoId,
-    creditedTeamId: d.creditedTeamId,
-    createdBy: me.id,
-    source: "MANUAL",
-    reversesId: d.id,
-    notes: `Reversal: ${reason.trim().slice(0, 300)}`,
+  const note = `Reversal: ${reason.trim().slice(0, 300)}`;
+  // One slice of a shared-corporate split reverses every slice, so the split stays whole.
+  const originals = d.splitGroupId
+    ? await db.select().from(t.disbursements).where(and(eq(t.disbursements.splitGroupId, d.splitGroupId), gt(t.disbursements.amount, "0")))
+    : [d];
+  await db.transaction(async (tx) => {
+    for (const o of originals) {
+      const [done] = await tx.select({ id: t.disbursements.id }).from(t.disbursements).where(eq(t.disbursements.reversesId, o.id));
+      if (done) continue;
+      await tx.insert(t.disbursements).values({
+        accountId: o.accountId,
+        opportunityId: o.opportunityId,
+        product: o.product,
+        amount: (-Number(o.amount)).toFixed(2),
+        disbursedAt: o.disbursedAt,
+        creditedTo: o.creditedTo,
+        creditedBdoId: o.creditedBdoId,
+        creditedTeamId: o.creditedTeamId,
+        createdBy: me.id,
+        source: "MANUAL",
+        reversesId: o.id,
+        shareId: o.shareId,
+        splitGroupId: o.splitGroupId,
+        notes: note,
+      });
+    }
+    await audit(me.id, "disbursement.reverse", "disbursement", d.id, { reason, splitGroupId: d.splitGroupId ?? undefined, rows: originals.length }, tx);
   });
-  await audit(me.id, "disbursement.reverse", "disbursement", d.id, { reason });
   touch(d.accountId);
-  return ok("Entry reversed.");
+  return ok(originals.length > 1 ? `Split entry reversed for all ${originals.length} BDOs.` : "Entry reversed.");
 }
 
 const KYC_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" };

@@ -4,13 +4,14 @@ import { Mail, MessageCircle, Navigation, Phone } from "lucide-react";
 import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { loadAccountFor, loadPerson } from "@/lib/access";
-import { canEditAccount, canManageQf, canReassignAccount, canViewFullIdNumber, canViewLocation, isSupervisor, STATUS_FLOW, userScope } from "@/lib/permissions";
+import { canEditAccount, canManageQf, canReassignAccount, canRequestShare, canViewFullIdNumber, canViewLocation, isSupervisor, STATUS_FLOW, userScope } from "@/lib/permissions";
+import { activeShare, sharesFor } from "@/lib/shares";
 import { creditOptions } from "@/lib/actions/money";
 import { PageHeader } from "@/components/ui/Page";
 import TabStrip from "@/components/TabStrip";
 import { KindBadge, StatusBadge } from "@/components/ui/Badges";
 import { shortAddress } from "@/lib/geo/geocode";
-import { OverviewTab, PipelineTab, ActivityTab, ContactsTab, NotesTab, MoneyTab, DocumentsTab, LocationTab } from "./tabs";
+import { OverviewTab, PipelineTab, ActivityTab, ContactsTab, NotesTab, MoneyTab, DocumentsTab, LocationTab, type SharingInfo } from "./tabs";
 
 type Tab = "overview" | "pipeline" | "activity" | "contacts" | "notes" | "money" | "documents" | "location";
 
@@ -71,15 +72,37 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
       .orderBy(desc(t.accountStatusHistory.changedAt))
       .limit(20);
     const reassignTo =
-      (me.role === "BDO" ? canEditAccount(me, acc) : isSupervisor(me) && canReassignAccount(me, acc, null))
+      (me.role === "BDO"
+        ? // Owner or the owner's BDO; a BDO who only shares the corporate can't move it.
+          canReassignAccount(me, acc, { id: me.id, role: "BDO", teamId: me.teamId })
+        : isSupervisor(me) && canReassignAccount(me, acc, null))
         ? await db
             .select({ id: t.users.id, name: t.users.name, role: t.users.role })
             .from(t.users)
             .where(and(userScope(me), eq(t.users.status, "ACTIVE")))
             .orderBy(t.users.name)
         : [];
+    let sharing: SharingInfo | null = null;
+    if (acc.kind === "CORPORATE") {
+      const shares = me.role === "AGENT" ? [await activeShare(id)].filter((x) => x !== null) : await sharesFor(me, eq(t.accountShares.accountId, id), 10);
+      const hasOpen = shares.some((s) => s.status === "PENDING" || s.status === "APPROVED");
+      const team = alias(t.teams, "team");
+      const requestTo =
+        canRequestShare(me, acc)
+          ? (
+              await db
+                .select({ id: t.users.id, name: t.users.name, teamName: team.name })
+                .from(t.users)
+                .leftJoin(team, eq(team.id, t.users.teamId))
+                .where(and(eq(t.users.role, "BDO"), eq(t.users.status, "ACTIVE")))
+                .orderBy(t.users.name)
+            ).filter((u) => u.id !== me.id)
+          : null;
+      sharing = { me: { id: me.id, name: me.name, isAdmin: me.role === "ADMIN" }, shares, requestTo, canRequestNow: !hasOpen };
+    }
     body = (
       <OverviewTab
+        sharing={sharing}
         acc={acc}
         ownerName={owner?.name ?? null}
         editable={editable}
@@ -130,7 +153,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
   } else if (tab === "money") {
     const credited = alias(t.users, "credited");
     const setter = alias(t.users, "setter");
-    const [disb, limits, uploads, credit] = await Promise.all([
+    const [disb, limits, uploads, credit, share] = await Promise.all([
       db
         .select({ d: t.disbursements, creditedName: credited.name })
         .from(t.disbursements)
@@ -146,6 +169,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
         .orderBy(desc(t.qfLimits.effectiveFrom)),
       db.select().from(t.statementUploads).where(eq(t.statementUploads.accountId, id)).orderBy(desc(t.statementUploads.createdAt)).limit(5),
       creditOptions(id),
+      acc.kind === "CORPORATE" ? activeShare(id) : Promise.resolve(null),
     ]);
     const [currentLimit] = await db
       .select({ amount: t.qfLimits.amount })
@@ -163,6 +187,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
         creditOptions={credit}
         canSetLimit={canManageQf(me)}
         isAdmin={me.role === "ADMIN"}
+        share={share}
       />
     );
   } else if (tab === "documents") {

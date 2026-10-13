@@ -54,7 +54,7 @@ async function nominatim(lat: number, lng: number): Promise<Address> {
   const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=en`;
   const res = await throttled(() =>
     fetch(url, {
-      headers: { "User-Agent": `SwitchlinkCRM/4.0 (${contact})`, Accept: "application/json" },
+      headers: { "User-Agent": `SwitchlinkCRM/5.0 (Anyonaz NewTech; ${contact})`, Accept: "application/json" },
       signal: AbortSignal.timeout(8000),
     })
   );

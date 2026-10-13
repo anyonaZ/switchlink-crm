@@ -1,4 +1,5 @@
 # Switchlink CRM: production image. Everything here is free and open source.
+# Switchlink CRM is © 2026 Anyonaz NewTech (proprietary, see LICENSE).
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -26,6 +27,8 @@ COPY --from=build --chown=crm /app/.next/standalone ./
 COPY --from=build --chown=crm /app/.next/static ./.next/static
 COPY --from=build --chown=crm /app/public ./public
 COPY --from=build --chown=crm /app/tools ./tools
+# The LICENSE is part of the authorship signature check (src/lib/signature-check.ts).
+COPY --from=build --chown=crm /app/LICENSE ./LICENSE
 USER crm
 EXPOSE 3000
 ENTRYPOINT ["/usr/bin/tini", "--"]
