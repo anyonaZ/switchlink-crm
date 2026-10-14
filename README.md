@@ -14,7 +14,7 @@ mobile phones in the field and is self-hosted on Switchlink's own server.
 
 **Key capabilities**
 
-- Account registration with mandatory GPS capture and automatic street-address lookup
+- Account registration with GPS capture and automatic street-address lookup (Admins may add corporates and merchants from the office without a location)
 - Sales pipeline per product: School Now Pay Later (SNPL), Salary Advance and Quick Finance (QF)
 - Activity logging and scheduled follow-ups
 - KYC document storage for merchants
@@ -46,6 +46,7 @@ The reporting structure is **Admin → Team Leader → BDO → Agent**.
 | View and work on accounts | Own | Own and their Agents' | Team | All |
 | View captured locations | — | — | Team | All |
 | Verify merchants and individuals | — | — | — | ✓ |
+| Add corporates and merchants without a GPS location, assigned to anyone (including themselves) | — | — | — | ✓ |
 | Set QF limits | — | — | — | ✓ |
 | Upload Pesi statements | — | — | — | ✓ |
 | Record or reverse disbursements | — | — | — | ✓ |
@@ -171,6 +172,34 @@ from **Teams** and **People**.
 | `STORAGE_DIR` | Location of uploaded files. Set automatically in Docker. |
 | `SECURE_COOKIES` | `true` behind HTTPS. Set automatically in Docker. |
 
+### Importing a lead list
+
+A corporate lead list can be loaded in one step. The list supplied by Lindsey
+Erodanga's team is included as `data/corporates-lindsey-sharon.json` (80
+corporates).
+
+**Before you run it,** create both people in **People**:
+- Lindsey Erodanga as a Team Leader on her team;
+- Sharon Achola as a BDO.
+
+**Then run:**
+
+```bash
+npm run import:corporates -- --dry-run     # preview, saves nothing
+npm run import:corporates                  # add the corporates
+# on the server: docker compose run --rm tools npm run import:corporates
+```
+
+**What it does:**
+- **Ownership:** every corporate is owned by Sharon Achola. Sharon is placed on Lindsey Erodanga's team, reporting to her, so Lindsey sees and manages all of them.
+- **Contact:** each corporate gets its contact person.
+- **Pipeline:** each corporate gets a Salary Advance opportunity at the stage from the list. Hot lead → Interested, warm lead → Qualified, follow-up → Contacted, proposal sent → Proposal, blank → Prospect.
+- **Notes:** anything that didn't fit a field, such as an incomplete email address or a phone number to check, is added as a note on the corporate.
+
+Corporates that already exist (same name) are skipped, so running it twice is
+safe. Use `--owner` and `--leader` (name or email) and `--file` to import
+other lists in the same format.
+
 ### Operations
 
 **Backups.** `scripts/backup.sh` saves the database and uploaded files to
@@ -232,6 +261,7 @@ npm run dev                       # http://localhost:3000
 | `npm run db:generate -- --name <change>` | Generate a migration after editing the schema |
 | `npm run db:seed` | Create the initial Admin account |
 | `npm run user:create-admin -- "Name" email` | Create an Admin with a random temporary password |
+| `npm run import:corporates` | Import a corporate lead list (see Importing a lead list) |
 
 ### Database changes
 

@@ -5,7 +5,7 @@ import { and, eq, ne, sql } from "drizzle-orm";
 import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { findAccountFor, loadPerson } from "@/lib/access";
-import { canEditAccount, canReassignAccount, canVerifyAccount, effectiveStatus, initialStatus, statusChangeProblem, type AccountKind, type AccountStatus } from "@/lib/permissions";
+import { canEditAccount, canReassignAccount, canSkipLocation, canVerifyAccount, effectiveStatus, initialStatus, statusChangeProblem, type AccountKind, type AccountStatus } from "@/lib/permissions";
 import { audit } from "@/lib/audit";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { geocodeCapture } from "@/lib/geo/worker";
@@ -111,7 +111,8 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
   if (Object.keys(v.errors).length) return fail("Some details need fixing.", v.errors);
 
   const loc = readLocation(f);
-  if (loc === null) return fail("Location is required to register an account. Allow location access and tap Save again.");
+  const noLocationOk = canSkipLocation(me, kind);
+  if (loc === null && !noLocationOk) return fail("Location is required to register an account. Allow location access and tap Save again.");
   if (loc === "stale") return fail("The captured location is too old. Tap Save again to capture a fresh one.");
 
   // Owner and team are decided here, never taken on trust from the form.
@@ -162,10 +163,13 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
       changedBy: me.id,
       note: pending ? "Account registered, sent to an Admin for verification" : "Account registered",
     });
-    const [cap] = await tx
-      .insert(t.locationCaptures)
-      .values({ accountId: acc.id, agentId: me.id, latitude: loc.lat, longitude: loc.lng, accuracyM: loc.accuracy, capturedAt: loc.capturedAt })
-      .returning({ id: t.locationCaptures.id });
+    // Admins adding corporates or merchants from the office may skip the GPS capture.
+    const [cap] = loc
+      ? await tx
+          .insert(t.locationCaptures)
+          .values({ accountId: acc.id, agentId: me.id, latitude: loc.lat, longitude: loc.lng, accuracyM: loc.accuracy, capturedAt: loc.capturedAt })
+          .returning({ id: t.locationCaptures.id })
+      : [];
     // Every merchant and individual starts in the pipeline for Quick Finance.
     if (kind === "MERCHANT" || kind === "INDIVIDUAL") {
       const [opp] = await tx
@@ -174,13 +178,13 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
         .returning({ id: t.opportunities.id });
       await tx.insert(t.opportunityStageHistory).values({ opportunityId: opp.id, toStage: "NEW", changedBy: me.id });
     }
-    await tx.insert(t.auditLog).values({ actorId: me.id, action: "account.create", entity: "account", entityId: acc.id, detail: { kind } });
-    return { accountId: acc.id, captureId: cap.id };
+    await tx.insert(t.auditLog).values({ actorId: me.id, action: "account.create", entity: "account", entityId: acc.id, detail: { kind, location: Boolean(cap) } });
+    return { accountId: acc.id, captureId: cap?.id ?? null };
   });
 
   // Look up the street name in the background; the agent never waits for it.
   // (Not `after()`: on this setup it held the response until the lookup finished.)
-  setTimeout(() => void geocodeCapture(captureId), 0);
+  if (captureId) setTimeout(() => void geocodeCapture(captureId), 0);
   revalidatePath("/accounts");
   revalidatePath("/dashboard");
   return ok(pending ? "Account created. An Admin will verify it before it's active." : "Account created.", accountId);

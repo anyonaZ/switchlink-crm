@@ -14,14 +14,22 @@ export default async function NewAccountPage({ searchParams }: { searchParams: P
     !isSupervisor(me)
       ? []
       : await db
-          .select({ id: t.users.id, name: t.users.name })
+          .select({ id: t.users.id, name: t.users.name, role: t.users.role })
           .from(t.users)
-          .where(and(userScope(me), inArray(t.users.role, ["BDO", "AGENT"]), eq(t.users.status, "ACTIVE"), ne(t.users.id, me.id)))
+          .where(
+            and(
+              userScope(me),
+              // Admins can give an account to anyone; others to BDOs and Agents below them.
+              inArray(t.users.role, me.role === "ADMIN" ? ["AGENT", "BDO", "TEAM_LEADER", "ADMIN"] : ["BDO", "AGENT"]),
+              eq(t.users.status, "ACTIVE"),
+              ne(t.users.id, me.id)
+            )
+          )
           .orderBy(t.users.name);
   return (
     <div className="mx-auto max-w-xl">
       <PageHeader title="New account" back={{ href: "/accounts", label: "Accounts" }} />
-      <NewAccountForm agents={agents} initialKind={kind} />
+      <NewAccountForm agents={agents} initialKind={kind} isAdmin={me.role === "ADMIN"} />
     </div>
   );
 }

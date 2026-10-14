@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Building2, GraduationCap, MapPin, Store, User, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 import ActionForm, { Field, Submit } from "@/components/ui/ActionForm";
+import { ROLE_LABELS } from "@/lib/labels";
 import { createAccount } from "@/lib/actions/accounts";
 
 type Kind = "MERCHANT" | "INDIVIDUAL" | "SCHOOL" | "CORPORATE";
@@ -30,7 +31,15 @@ function geoError(err: GeolocationPositionError | Error) {
   return err.message;
 }
 
-export default function NewAccountForm({ agents, initialKind }: { agents: { id: string; name: string }[]; initialKind?: string }) {
+export default function NewAccountForm({
+  agents,
+  initialKind,
+  isAdmin = false,
+}: {
+  agents: { id: string; name: string; role: keyof typeof ROLE_LABELS }[];
+  initialKind?: string;
+  isAdmin?: boolean;
+}) {
   const [kind, setKind] = useState<Kind | null>(KINDS.some((k) => k.value === initialKind) ? (initialKind as Kind) : null);
   const [loc, setLoc] = useState<Loc>({ state: "idle" });
   const formWrap = useRef<HTMLDivElement>(null);
@@ -96,6 +105,8 @@ export default function NewAccountForm({ agents, initialKind }: { agents: { id: 
   const d = (k: string) => draft[k] ?? "";
   const isPerson = kind === "INDIVIDUAL";
   const isMerchantLike = kind === "MERCHANT" || kind === "INDIVIDUAL";
+  // Same rule as canSkipLocation() on the server.
+  const locationOptional = isAdmin && (kind === "CORPORATE" || kind === "MERCHANT");
 
   return (
     <div className="space-y-5">
@@ -185,12 +196,12 @@ export default function NewAccountForm({ agents, initialKind }: { agents: { id: 
                 <input id="location_text" name="location_text" defaultValue={d("location_text")} className="input" />
               </Field>
               {agents.length > 0 && (
-                <Field label="Assign to" name="owner_id">
+                <Field label="Assign to" name="owner_id" hint={isAdmin ? "Any BDO, Team Leader, Agent or Admin, or yourself." : undefined}>
                   <select id="owner_id" name="owner_id" defaultValue={d("owner_id")} className="input">
                     <option value="">Me</option>
                     {agents.map((a) => (
                       <option key={a.id} value={a.id}>
-                        {a.name}
+                        {a.name} ({ROLE_LABELS[a.role]})
                       </option>
                     ))}
                   </select>
@@ -203,7 +214,9 @@ export default function NewAccountForm({ agents, initialKind }: { agents: { id: 
                 <MapPin size={20} className="mt-0.5 shrink-0 text-brand-600" />
                 <div className="min-w-0 flex-1">
                   <p className="font-medium text-ink">Location</p>
-                  <p className="text-sm text-slate-500">Required. Capture it while you're at the client.</p>
+                  <p className="text-sm text-slate-500">
+                    {locationOptional ? "Optional for Admins adding corporates and merchants from the office." : "Required. Capture it while you're at the client."}
+                  </p>
                 </div>
               </div>
               {loc.state === "ok" && (
@@ -243,7 +256,7 @@ export default function NewAccountForm({ agents, initialKind }: { agents: { id: 
             </div>
 
             <div className="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-10 -mx-4 bg-slate-50/95 px-4 py-2 backdrop-blur md:static md:mx-0 md:bg-transparent md:p-0">
-              <Submit pendingText="Saving…">{loc.state === "ok" ? "Save account" : "Save account (capture location first)"}</Submit>
+              <Submit pendingText="Saving…">{loc.state === "ok" || locationOptional ? "Save account" : "Save account (capture location first)"}</Submit>
             </div>
           </ActionForm>
         </div>

@@ -160,6 +160,37 @@ that the forced password change and rename work.
    - **Not done:** the root cause inside Next 15.5 / React 19 was not
      identified. Worth retesting after upgrading Next.
 
+### Session of 14 October 2026 (evening)
+
+9. **Admins can add corporates and merchants without a GPS location.**
+   - **The rule:** `canSkipLocation()` in `permissions.ts`. Schools and
+     individuals still need a location, and everyone else still needs one for
+     every kind of account.
+   - **Assigning:** on New account, Admins can assign the account to anyone
+     active (Agent, BDO, Team Leader, Admin) or keep it ("Me"). The owner's
+     team becomes the account's team.
+   - **Without GPS:** no location capture is stored, and the Location tab shows
+     "No location was captured".
+10. **Imported Lindsey and Sharon's corporate lead list.**
+    - **Source:** `DOC-20261003-WA0071.xlsx` was converted to
+      `data/corporates-lindsey-sharon.json` (80 corporates).
+    - **Loading it:** `npm run import:corporates` (`scripts/import-corporates.ts`).
+      Lindsey Erodanga (Team Leader, with a team) and Sharon Achola (BDO) must
+      exist first.
+    - **Ownership:** all corporates are owned by Sharon on Lindsey's team. The
+      script also sets Sharon to report to Lindsey on that team.
+    - **What each corporate gets:** a contact, a Salary Advance opportunity
+      (stage from the list's status), and a note for anything that didn't fit.
+    - **Name fixes:** "Nairobi avulsion" → Nairobi Aviation College,
+      "House of leath" → House of Leather, "The monarch group ldt" → The
+      Monarch Group Ltd.
+    - **Phones:** leading zeros were restored. Penda Health and Q-ways phones
+      look wrong (10 digits) and are flagged with notes.
+    - **Kept as corporates:** colleges and universities stayed as Corporate, as
+      the user called the whole list corporates.
+    - **Re-running:** the import is idempotent (skips existing names) and has a
+      `--dry-run` mode.
+
 ## 6. How to run
 
 **Laptop:** Node 22, Postgres 16, `pip install xlrd`.

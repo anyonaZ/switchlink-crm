@@ -7,6 +7,7 @@ import {
   canReassignAccount,
   canRecordDisbursement,
   canResetPassword,
+  canSkipLocation,
   canUploadStatement,
   canViewAccount,
   canVerifyAccount,
@@ -120,4 +121,12 @@ test("new individuals wait for verification; other accounts start in Ongoing eng
   assert.equal(initialStatus(admin, "INDIVIDUAL"), "ACTIVE");
   assert.equal(initialStatus(agentA, "MERCHANT"), "ONGOING_ENGAGEMENT");
   assert.equal(initialStatus(admin, "CORPORATE"), "ONGOING_ENGAGEMENT");
+});
+
+test("only Admins may add corporates and merchants without a GPS location", () => {
+  assert.ok(canSkipLocation(admin, "CORPORATE"));
+  assert.ok(canSkipLocation(admin, "MERCHANT"));
+  assert.ok(!canSkipLocation(admin, "SCHOOL"));
+  assert.ok(!canSkipLocation(admin, "INDIVIDUAL"));
+  for (const who of [leadA, bdoA, agentA]) assert.ok(!canSkipLocation(who, "CORPORATE"));
 });

@@ -80,6 +80,14 @@ export function canViewLocation(a: Actor, acc: AccountRef) {
   return isLeader(a) && sameTeam(a, acc.teamId);
 }
 
+/**
+ * GPS capture is required at registration, except that an Admin may add
+ * corporates and merchants from the office (e.g. leads from a list) without it.
+ */
+export function canSkipLocation(a: Pick<Actor, "role">, kind: AccountKind) {
+  return a.role === "ADMIN" && (kind === "CORPORATE" || kind === "MERCHANT");
+}
+
 /** Only Admins verify merchants and individuals before they become Active. */
 export function canVerifyAccount(a: Actor) {
   return isAdmin(a) && a.status === "ACTIVE";
