@@ -195,8 +195,8 @@ These are not done yet, roughly in priority order.
   Use `DELETE` instead.
 - Africa/Nairobi time everywhere (`src/lib/format.ts`, `timezone.ts`).
 - Money is `numeric(14,2)`, summed in SQL, never in the browser.
-- The zip given to the user is named `switchlink-crm-v5.x.zip`, while the README
-  title still says v4. Rename the README title if a version bump matters.
+- The README is the professional, client-facing document. It deliberately
+  doesn't mention the authorship signature; that is documented only here.
 
 ## 9. Prompt to start the next chat
 
