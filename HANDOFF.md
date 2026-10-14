@@ -134,7 +134,7 @@ npm run dev
 **Office server:** fill in `.env`, then run `docker compose up -d --build`
 (migrations run automatically). Then create the real admin with
 `docker compose run --rm tools npm run user:create-admin -- "Name" email`,
-which prints a random temporary password. See README §1.
+which prints a random temporary password. See README → Deployment.
 
 ## 7. Suggested before deployment
 
