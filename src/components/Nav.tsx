@@ -16,6 +16,7 @@ import {
   Plus,
   UserCog,
   KeyRound,
+  UserRound,
   type LucideIcon,
 } from "lucide-react";
 import { logout } from "@/lib/actions/auth";
@@ -53,8 +54,8 @@ export function Sidebar({ role, name, roleLabel }: { role: Role; name: string; r
         <p className="truncate text-sm font-medium text-ink">{name}</p>
         <p className="truncate text-xs text-slate-500">{roleLabel}</p>
         <div className="mt-2 flex gap-1">
-          <Link href="/change-password" className="btn-ghost btn-sm px-2 text-slate-500">
-            <KeyRound size={16} /> Password
+          <Link href="/profile" className="btn-ghost btn-sm px-2 text-slate-500">
+            <UserRound size={16} /> Profile
           </Link>
           <form action={logout}>
             <button className="btn-ghost btn-sm px-2 text-slate-500">
@@ -95,7 +96,7 @@ export function BottomNav() {
           </Link>
         </div>
         {slot("/follow-ups", "Follow-ups", CalendarCheck)}
-        {slot("/more", "More", Menu, ["/more", "/pipeline", "/shares", "/statements", "/locations", "/reports", "/users", "/teams", "/change-password"])}
+        {slot("/more", "More", Menu, ["/more", "/pipeline", "/shares", "/statements", "/locations", "/reports", "/users", "/teams", "/profile", "/change-password"])}
       </div>
     </nav>
   );

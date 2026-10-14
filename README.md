@@ -27,10 +27,11 @@ cp .env.example .env
 #   CRM_DOMAIN              crm.switchlinkafrica.com
 #   GEOCODER_CONTACT_EMAIL  an address OpenStreetMap can contact
 docker compose up -d --build
-docker compose run --rm tools npm run user:create-admin -- "Daniel Eshikumo" admin@test.com
+docker compose run --rm tools npm run user:create-admin -- "Your Name" you@switchlinkafrica.com
 ```
 
-The last command prints a temporary password. Sign in at
+The last command prints a random temporary password (safer than the fixed
+one `npm run db:seed` uses, so use this on the real server). Sign in at
 `https://<CRM_DOMAIN>`, set your own password, then add teams and people from
 **People** and **Teams**.
 
@@ -57,15 +58,22 @@ sudo -u postgres psql -c "CREATE ROLE crm LOGIN PASSWORD 'crm';" -c "CREATE DATA
 npm install
 cp .env.example .env              # point DATABASE_URL at your local Postgres
 npm run db:migrate
-npm run db:seed                   # demo data; password Switchlink2026!
+npm run db:seed -- "Your Name"    # creates the Admin login only (no demo data)
 npm run dev
 npm test                          # unit tests
 ```
 
-Demo logins after seeding: `admin@test.com` (Admin), `joy@test.com` (Team
-Leader), `zaddock@test.com` (BDO, Joy's team) and `brian@test.com` (Agent
-under Zaddock). A database seeded before this change had the Admin as
-`daniel@test.com`; `npm run db:migrate` renames it to `admin@test.com`.
+The seed creates one Admin, `admin@test.com`, password `Switchlink2026!`,
+and nothing else. You must set your own password at first sign-in. The name
+defaults to "Administrator" unless you pass one; anyone can change their own
+name later from **Profile**, and Admins can rename others from **People**.
+Pass an email as the second argument to use a different login:
+`npm run db:seed -- "Your Name" you@example.com`. Running it twice does
+nothing. Add teams, Team Leaders, BDOs and Agents from **Teams** and **People**.
+
+To start again from an empty database: `dropdb crm && createdb -O crm crm &&
+npm run db:migrate && npm run db:seed` (on the server: `docker compose down -v`,
+which also deletes uploaded files).
 
 To change the schema, edit `src/lib/db/schema.ts` and run
 `npm run db:generate -- --name what_changed`. Commit the generated SQL file in

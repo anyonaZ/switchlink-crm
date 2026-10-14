@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, KeyRound, LogOut } from "lucide-react";
+import { ChevronRight, KeyRound, LogOut, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { NAV } from "@/lib/nav";
 import { logout } from "@/lib/actions/auth";
@@ -33,6 +33,11 @@ export default async function MorePage() {
             <ChevronRight size={18} className="text-slate-400" />
           </Link>
         ))}
+        <Link href="/profile" className="flex items-center gap-3 px-4 py-3.5 active:bg-slate-50">
+          <UserRound size={20} className="text-slate-500" />
+          <span className="flex-1 font-medium text-ink">Profile (name)</span>
+          <ChevronRight size={18} className="text-slate-400" />
+        </Link>
         <Link href="/change-password" className="flex items-center gap-3 px-4 py-3.5 active:bg-slate-50">
           <KeyRound size={20} className="text-slate-500" />
           <span className="flex-1 font-medium text-ink">Change password</span>

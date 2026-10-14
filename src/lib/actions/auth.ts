@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { eq, sql } from "drizzle-orm";
 import { db, t } from "@/lib/db";
@@ -87,4 +88,17 @@ export async function changePassword(_prev: ActionResult | null, form: FormData)
   await destroyUserSessions(me.id, true);
   await audit(me.id, "password.change", "user", me.id);
   return ok("Password changed.");
+}
+
+/** Anyone can change the name shown for them (their email and role are managed by an Admin). */
+export async function updateMyName(_prev: ActionResult | null, form: FormData): Promise<ActionResult> {
+  const me = await requireUser();
+  const name = String(form.get("name") ?? "").trim().replace(/\s+/g, " ");
+  if (name.length < 2) return fail("Enter your full name.", { name: "Required" });
+  if (name.length > 120) return fail("That name is too long.", { name: "Too long" });
+  if (name === me.name) return ok("No change.");
+  await db.update(t.users).set({ name }).where(eq(t.users.id, me.id));
+  await audit(me.id, "user.rename_self", "user", me.id, { from: me.name, to: name });
+  revalidatePath("/", "layout");
+  return ok("Name updated.");
 }
