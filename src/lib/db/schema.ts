@@ -38,6 +38,8 @@ export const accountKind = pgEnum("account_kind", ["SCHOOL", "CORPORATE", "MERCH
 export const accountStatus = pgEnum("account_status", [
   "ONGOING_ENGAGEMENT",
   "DOCUMENT_COLLECTION",
+  /** Set by the system when a non-Admin activates a merchant or individual; an Admin verifies it. */
+  "PENDING_VERIFICATION",
   "ACTIVE",
   "INACTIVE",
 ]);
@@ -147,10 +149,17 @@ export const accounts = pgTable(
     /** Account number printed on Pesi statements, e.g. MCA00010880001. */
     statementAccountNo: text("statement_account_no"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    /** While PENDING_VERIFICATION: the status to return to if the Admin declines. */
+    pendingFromStatus: accountStatus("pending_from_status"),
+    verificationRequestedAt: timestamp("verification_requested_at", { withTimezone: true }),
+    verificationRequestedBy: uuid("verification_requested_by").references(() => users.id, { onDelete: "set null" }),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    verifiedBy: uuid("verified_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [
     index("accounts_owner_idx").on(t.ownerId),
+    index("accounts_status_idx").on(t.status),
     index("accounts_team_idx").on(t.teamId),
     index("accounts_kind_idx").on(t.kind),
     uniqueIndex("accounts_pesi_no_idx").on(t.pesiAccountNo),
@@ -172,9 +181,6 @@ export const individualProfiles = pgTable("individual_profiles", {
   accountId: uuid("account_id")
     .primaryKey()
     .references(() => accounts.id, { onDelete: "cascade" }),
-  /** AES-256-GCM ciphertext (see src/lib/crypto.ts). Never select into a page for non-admins. */
-  idNumberEnc: text("id_number_enc"),
-  idLast4: varchar("id_last4", { length: 4 }),
   dateOfBirth: date("date_of_birth"),
 });
 

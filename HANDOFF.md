@@ -3,7 +3,7 @@
 Use this to continue work in a new chat. Attach this file **and** the latest
 project zip, then paste the prompt in section 9.
 
-Last updated: 14 October 2026.
+Last updated: 14 October 2026 (third session).
 
 ---
 
@@ -11,7 +11,7 @@ Last updated: 14 October 2026.
 
 A self-hosted, phone-first CRM for **Switchlink Africa**'s field sales team,
 built by **Anyonaz NewTech** (proprietary; see `LICENSE`). It tracks clients
-(schools, corporates, merchants, individuals), the sales pipeline, follow-ups,
+(schools, corporates, merchants, individuals; individuals need only a name and phone), the sales pipeline, follow-ups,
 captured GPS locations, and money: Quick Finance (QF) overdraft draws read from
 Pesi statements, plus SNPL and Salary Advance disbursements.
 
@@ -58,7 +58,8 @@ unit-tested. List queries go through `accountScope()`, `userScope()` and
 | People / teams | `src/lib/actions/people.ts`, `src/app/(app)/users`, `teams` |
 | Profile (own name) | `src/app/(app)/profile`, `updateMyName` in `actions/auth.ts` |
 | Scripts | `scripts/seed.ts` (Admin only), `scripts/create-admin.ts` (random password), `scripts/migrate.ts`, `scripts/backup.sh` |
-| Tests | `tests/permissions.test.ts`, `tests/sharing.test.ts`, `tests/signature.test.ts`, `tests/statements.test.ts` (21 pass; 2 statement tests skip without the real `.xls` files in `STATEMENT_DIR`) |
+| Verification | `effectiveStatus`/`initialStatus`/`canVerifyAccount` in `permissions.ts`; `verifyAccount`/`declineVerification` in `actions/accounts.ts`; queue on the Admin dashboard |
+| Tests | `tests/permissions.test.ts`, `tests/sharing.test.ts`, `tests/signature.test.ts`, `tests/statements.test.ts` (23 pass; 2 statement tests skip without the real `.xls` files in `STATEMENT_DIR`) |
 
 ## 5. What was done in the last two sessions
 
@@ -119,13 +120,53 @@ All checks pass: typecheck, unit tests and production build. I also checked in a
 browser that every page loads on an empty database with only the Admin, and
 that the forced password change and rename work.
 
+### Session of 14 October 2026 (later)
+
+6. **No ID numbers for individuals.**
+   - Individuals now need only a name and a **phone number** (required). The
+     date of birth stays optional.
+   - Migration 0005 dropped the ID columns. The encryption code and the
+     `DATA_ENCRYPTION_KEY` setting were removed, since IDs were their only use.
+   - A phone number can belong to only one individual. `0712…`, `+254712…`
+     and spaced forms count as the same number.
+7. **Admin verification of merchants and individuals.**
+   - **New status:** `PENDING_VERIFICATION` (shown as "Pending verification").
+     The system sets it; nobody picks it from the status list.
+   - **When it applies:** a non-Admin setting a merchant or individual to
+     Active gets Pending verification instead. A new individual registered by a
+     non-Admin starts as Pending verification.
+   - **Admins:** their own changes and registrations are Active directly.
+   - **Admin dashboard:** shows **Accounts to verify** with Verify and Decline
+     buttons. The same buttons appear on the account page.
+   - **Decline:** needs a reason. The account returns to its previous status
+     (stored in `accounts.pending_from_status`), and the reason goes into its
+     status history and activity feed.
+   - **Agents/BDOs:** their dashboard shows how many of their accounts are
+     waiting.
+   - **While pending:** the status can't be changed except by verify/decline.
+   - **New account columns:** `pending_from_status`,
+     `verification_requested_at/by`, `verified_at/by`.
+   - The status tracker uses short labels (Engagement / Documents /
+     Verification / Active), stacked, so four steps fit on a phone.
+8. **Fixed a pre-existing bug where forms sometimes stuck on "Saving…".**
+   - **The bug:** after a save, React sometimes never finished applying the
+     refreshed page, so the form showed "Saving…" forever even though the save
+     had worked. This was reproduced in the original v5 code too.
+   - **The fix:** `ActionForm` now calls the server action directly, handles
+     the result immediately (toast, close sheet, reset), then calls
+     `router.refresh()`.
+   - **What can still happen:** the page occasionally takes a few seconds to
+     show the new data, but always catches up, and navigation is never blocked.
+   - **Not done:** the root cause inside Next 15.5 / React 19 was not
+     identified. Worth retesting after upgrading Next.
+
 ## 6. How to run
 
 **Laptop:** Node 22, Postgres 16, `pip install xlrd`.
 
 ```bash
 npm install
-cp .env.example .env   # fill in DATABASE_URL and DATA_ENCRYPTION_KEY (openssl rand -base64 32)
+cp .env.example .env   # fill in DATABASE_URL
 npm run db:migrate
 npm run db:seed -- "Your Name"
 npm run dev
@@ -143,51 +184,50 @@ These are not done yet, roughly in priority order.
 1. **Don't ship the known admin password.** On the server, use
    `user:create-admin` (random password) instead of `db:seed`, or seed and sign
    in right away to change it. Use a real email as the login.
-2. **Keep `DATA_ENCRYPTION_KEY` safe.** Store it off the server (password
-   manager plus a printed copy). If it's lost, stored national ID numbers can
-   never be read again.
-3. **Backups off the machine.** Schedule `scripts/backup.sh` nightly, copy
+2. **Backups off the machine.** Schedule `scripts/backup.sh` nightly, copy
    `./backups` to another disk or cloud storage, and **test a restore once**.
-4. **Server hardening.**
+3. **Server hardening.**
    - Open only ports 80/443 (and SSH by key only).
    - Turn on automatic security updates and put the server on a UPS.
    - Set Docker log size limits (`logging: max-size`) so logs can't fill the disk.
    - If the office IP changes, set up dynamic DNS.
-5. **Office internet is a single point of failure.** Field staff can't reach
+4. **Office internet is a single point of failure.** Field staff can't reach
    the CRM if the office line or power goes down. Consider a cheap VPS, or at
    least a backup internet line.
-6. **Login throttle and shared IPs.** The per-IP sign-in limit (30 attempts per
+5. **Login throttle and shared IPs.** The per-IP sign-in limit (30 attempts per
    10 min) is kept in memory. Staff on the same office Wi-Fi or mobile-carrier
    NAT share one IP, so one person mistyping could slow down sign-in for
    others. Consider keying the limit on email + IP.
-7. **Notifications.** Nothing tells a Team Leader or Admin that a sharing
+6. **Notifications.** Nothing tells a Team Leader or Admin that a sharing
    request is waiting, or an agent that a follow-up is due, unless they open
    the app. Options: email via SMTP, SMS/WhatsApp (e.g. Africa's Talking —
    paid), or web push (free).
-8. **Bulk import of existing clients** from spreadsheets (CSV import), so day 1
+7. **Bulk import of existing clients** from spreadsheets (CSV import), so day 1
    doesn't mean re-typing everything. Remember that new accounts need GPS at
    registration, so imported ones need a rule.
-9. **Kenya Data Protection Act 2019.** The CRM stores ID numbers, phone numbers
-   and GPS. Check whether Switchlink must register with the ODPC, and add a
+8. **Kenya Data Protection Act 2019.** The CRM stores names, phone numbers and GPS
+   locations. Check whether Switchlink must register with the ODPC, and add a
    privacy notice, consent wording and a retention/deletion policy. (This is
    not legal advice; confirm with their legal or compliance person.)
-10. **Audit log viewer.** Everything is logged in `audit_log`, but there's no
+9. **Audit log viewer.** Everything is logged in `audit_log`, but there's no
     screen to read it yet. A simple Admin page would help (also for
     `signature.mismatch`).
-11. **Monitoring.** Add a `/api/health` endpoint plus a free uptime checker
+10. **Monitoring.** Add a `/api/health` endpoint plus a free uptime checker
     (e.g. Uptime Kuma on another machine) that alerts when the CRM is down.
-12. **Real-world test run.** Pilot with 2–3 BDOs on their own phones and real
+11. **Real-world test run.** Pilot with 2–3 BDOs on their own phones and real
     Pesi statements for a week. Rebuild an end-to-end test with its own test
     data (the old one used the demo seed).
-13. **Set `GEOCODER_CONTACT_EMAIL`** to a real Switchlink address. This is a
+12. **Set `GEOCODER_CONTACT_EMAIL`** to a real Switchlink address. This is a
     Nominatim usage-policy requirement.
-14. **Short user guide or training session** for each role (Agent, BDO, Team
+13. **Short user guide or training session** for each role (Agent, BDO, Team
     Leader, Admin).
 
 ## 8. Things to know / gotchas
 
 - `next start` warns because the build uses `output: "standalone"`. Docker runs
   `node server.js`, which is correct. The warning only matters locally.
+- `ActionForm` does **not** use `useActionState` (see item 8 above); keep it
+  that way unless the Saving… hang is confirmed fixed upstream.
 - Server actions passed into client components must be bound **on the
   server**. Binding in the client broke the success toast; see how
   `ShareRequestForm` receives `action`.

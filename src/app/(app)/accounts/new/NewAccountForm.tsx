@@ -8,13 +8,12 @@ import { createAccount } from "@/lib/actions/accounts";
 type Kind = "MERCHANT" | "INDIVIDUAL" | "SCHOOL" | "CORPORATE";
 const KINDS: { value: Kind; label: string; hint: string; icon: typeof Store }[] = [
   { value: "MERCHANT", label: "Merchant", hint: "Business, needs KYC", icon: Store },
-  { value: "INDIVIDUAL", label: "Individual", hint: "Needs ID only", icon: User },
+  { value: "INDIVIDUAL", label: "Individual", hint: "Phone number only", icon: User },
   { value: "SCHOOL", label: "School", hint: "SNPL, Salary Advance", icon: GraduationCap },
   { value: "CORPORATE", label: "Corporate", hint: "Salary Advance", icon: Building2 },
 ];
 const DRAFT_KEY = "sl-new-account-draft";
-// The ID number is never written to the phone's storage.
-const DRAFT_SKIP = new Set(["id_number", "latitude", "longitude", "accuracy", "captured_at", "kind"]);
+const DRAFT_SKIP = new Set(["latitude", "longitude", "accuracy", "captured_at", "kind"]);
 
 type Loc =
   | { state: "idle" }
@@ -140,8 +139,8 @@ export default function NewAccountForm({ agents, initialKind }: { agents: { id: 
                 <input id="name" name="name" required defaultValue={d("name")} className="input" autoComplete="off" />
               </Field>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Phone" name="phone">
-                  <input id="phone" name="phone" type="tel" inputMode="tel" defaultValue={d("phone")} placeholder="07…" className="input" />
+                <Field label="Phone" name="phone" hint={isPerson ? "Required. An Admin verifies the client before the account is active." : undefined}>
+                  <input id="phone" name="phone" type="tel" inputMode="tel" required={isPerson} defaultValue={d("phone")} placeholder="07…" className="input" />
                 </Field>
                 <Field label="Email" name="email">
                   <input id="email" name="email" type="email" inputMode="email" defaultValue={d("email")} className="input" />
@@ -168,14 +167,9 @@ export default function NewAccountForm({ agents, initialKind }: { agents: { id: 
                 </>
               )}
               {isPerson && (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="National ID number" name="id_number" hint="Stored encrypted. Others see only the last 4 digits.">
-                    <input id="id_number" name="id_number" required inputMode="numeric" autoComplete="off" className="input" />
-                  </Field>
-                  <Field label="Date of birth (optional)" name="date_of_birth">
-                    <input id="date_of_birth" name="date_of_birth" type="date" defaultValue={d("date_of_birth")} className="input" />
-                  </Field>
-                </div>
+                <Field label="Date of birth (optional)" name="date_of_birth">
+                  <input id="date_of_birth" name="date_of_birth" type="date" defaultValue={d("date_of_birth")} className="input" />
+                </Field>
               )}
               {(kind === "SCHOOL" || kind === "CORPORATE") && (
                 <Field label="Industry (optional)" name="industry">

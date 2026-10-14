@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, startTransition, useActionState, useContext, useEffect, useRef, useState } from "react";
+import { createContext, startTransition, useContext, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ActionResult } from "@/lib/action-result";
 import { useToast } from "@/components/ui/Toast";
@@ -31,7 +31,13 @@ export default function ActionForm({
   /** Navigate after success; `{id}` is replaced with the id the action returned. */
   redirectTo?: string;
 }) {
-  const [state, formAction, pending] = useActionState(action, null);
+  // The save is called directly and its result handled the moment the server
+  // answers. (With useActionState the result waited for React to finish
+  // re-rendering the refreshed page, which now and then never happened and
+  // left the form stuck on "Saving…" even though the save had gone through.)
+  const [state, setState] = useState<ActionResult | null>(null);
+  const [pending, setPending] = useState(false);
+  const busy = useRef(false);
   const toast = useToast();
   const close = useCloseSheet();
   const router = useRouter();
@@ -48,18 +54,33 @@ export default function ActionForm({
     return () => clearTimeout(id);
   }, [pending]);
 
-  useEffect(() => {
-    if (!state) return;
-    if (state.ok) {
-      if (state.message) toast("success", state.message);
+  async function submit(data: FormData) {
+    if (busy.current) return;
+    busy.current = true;
+    setPending(true);
+    let res: ActionResult | undefined;
+    try {
+      res = await action(state, data);
+    } catch (e) {
+      // A redirect (e.g. after signing in) is handled by Next; anything else is a real failure.
+      if (e && typeof e === "object" && "digest" in e && String((e as { digest?: string }).digest).startsWith("NEXT_REDIRECT")) throw e;
+      res = { ok: false, error: "Couldn't reach the server. Check your connection and try again." };
+    } finally {
+      busy.current = false;
+      setPending(false);
+    }
+    if (!res) return; // the action navigated away
+    setState(res);
+    if (res.ok) {
+      if (res.message) toast("success", res.message);
       if (resetOnSuccess) ref.current?.reset();
       if (closeOnSuccess) close();
-      if (redirectTo) router.push(redirectTo.replace("{id}", state.id ?? ""));
+      if (redirectTo) router.push(redirectTo.replace("{id}", res.id ?? ""));
+      else startTransition(() => router.refresh());
     } else {
-      toast("error", state.error);
+      toast("error", res.error);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
+  }
 
   return (
     // Submitted by hand (not via the form's `action` prop) so React doesn't
@@ -69,9 +90,7 @@ export default function ActionForm({
       className={className}
       onSubmit={(e) => {
         e.preventDefault();
-        if (pending) return;
-        const data = new FormData(e.currentTarget);
-        startTransition(() => formAction(data));
+        void submit(new FormData(e.currentTarget));
       }}
     >
       <Pending.Provider value={pending}>

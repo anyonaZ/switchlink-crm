@@ -1,12 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { findAccountFor, loadPerson } from "@/lib/access";
-import { canEditAccount, canReassignAccount, canViewFullIdNumber, statusChangeProblem, type AccountKind, type AccountStatus } from "@/lib/permissions";
-import { encryptField, decryptField } from "@/lib/crypto";
+import { canEditAccount, canReassignAccount, canVerifyAccount, effectiveStatus, initialStatus, statusChangeProblem, type AccountKind, type AccountStatus } from "@/lib/permissions";
 import { audit } from "@/lib/audit";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { geocodeCapture } from "@/lib/geo/worker";
@@ -42,14 +41,12 @@ function validateCommon(f: FormData, kind: AccountKind) {
   if (!name) errors.name = kind === "INDIVIDUAL" ? "Enter the client's full name." : "Enter the business or organisation name.";
   const phone = str(f, "phone");
   if (phone && !PHONE_RE.test(phone)) errors.phone = "Check the phone number.";
+  if (kind === "INDIVIDUAL" && !phone) errors.phone = "Individuals need a phone number.";
   const email = str(f, "email");
   if (email && !EMAIL_RE.test(email)) errors.email = "Check the email address.";
   const pesi = str(f, "pesi_account_no");
   if (pesi && !/^\d{4}$/.test(pesi)) errors.pesi_account_no = "The Pesi account number is 4 digits.";
   const stmtNo = str(f, "statement_account_no");
-  const idNumber = str(f, "id_number")?.replace(/\s/g, "") ?? null;
-  if (idNumber && !/^[0-9A-Za-z]{6,12}$/.test(idNumber)) errors.id_number = "Check the ID number (6–12 letters or digits).";
-  if (kind === "INDIVIDUAL" && !idNumber && f.get("_mode") === "create") errors.id_number = "Individuals need their national ID number.";
   return {
     errors,
     values: {
@@ -61,7 +58,6 @@ function validateCommon(f: FormData, kind: AccountKind) {
       pesiAccountNo: pesi,
       statementAccountNo: stmtNo ? stmtNo.toUpperCase() : null,
     },
-    idNumber,
     merchant: {
       businessType: str(f, "business_type"),
       registrationNo: str(f, "registration_no"),
@@ -72,7 +68,22 @@ function validateCommon(f: FormData, kind: AccountKind) {
   };
 }
 
-async function uniqueProblem(pesi: string | null, stmtNo: string | null, exceptId?: string): Promise<Record<string, string> | null> {
+async function uniqueProblem(pesi: string | null, stmtNo: string | null, exceptId?: string, individualPhone?: string | null): Promise<Record<string, string> | null> {
+  if (individualPhone) {
+    // Same number written differently (0712…, +254712…, spaces) counts as the same person.
+    const digits = individualPhone.replace(/\D/g, "").replace(/^(254|0)/, "");
+    const [hit] = await db
+      .select({ id: t.accounts.id, name: t.accounts.name })
+      .from(t.accounts)
+      .where(
+        and(
+          eq(t.accounts.kind, "INDIVIDUAL"),
+          sql`regexp_replace(regexp_replace(coalesce(${t.accounts.phone}, ''), '[^0-9]', '', 'g'), '^(254|0)', '') = ${digits}`,
+          exceptId ? ne(t.accounts.id, exceptId) : sql`true`
+        )
+      );
+    if (hit) return { phone: `This number is already registered to ${hit.name}.` };
+  }
   if (pesi) {
     const [hit] = await db
       .select({ id: t.accounts.id })
@@ -119,24 +130,38 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
     teamId = owner.teamId;
   }
 
-  const dup = await uniqueProblem(v.values.pesiAccountNo, v.values.statementAccountNo);
+  const dup = await uniqueProblem(v.values.pesiAccountNo, v.values.statementAccountNo, undefined, kind === "INDIVIDUAL" ? v.values.phone : null);
   if (dup) return fail("That number is already in use.", dup);
 
+  const status = initialStatus(me, kind);
+  const pending = status === "PENDING_VERIFICATION";
   const { accountId, captureId } = await db.transaction(async (tx) => {
     const [acc] = await tx
       .insert(t.accounts)
-      .values({ ...v.values, kind, ownerId, teamId, status: "ONGOING_ENGAGEMENT", createdBy: me.id })
+      .values({
+        ...v.values,
+        kind,
+        ownerId,
+        teamId,
+        status,
+        createdBy: me.id,
+        ...(pending
+          ? { pendingFromStatus: "ONGOING_ENGAGEMENT" as const, verificationRequestedAt: new Date(), verificationRequestedBy: me.id }
+          : status === "ACTIVE"
+            ? { verifiedAt: new Date(), verifiedBy: me.id }
+            : {}),
+      })
       .returning({ id: t.accounts.id });
     if (kind === "MERCHANT") await tx.insert(t.merchantProfiles).values({ accountId: acc.id, ...v.merchant });
     if (kind === "INDIVIDUAL") {
-      await tx.insert(t.individualProfiles).values({
-        accountId: acc.id,
-        idNumberEnc: v.idNumber ? encryptField(v.idNumber) : null,
-        idLast4: v.idNumber ? v.idNumber.slice(-4) : null,
-        dateOfBirth: v.dob,
-      });
+      await tx.insert(t.individualProfiles).values({ accountId: acc.id, dateOfBirth: v.dob });
     }
-    await tx.insert(t.accountStatusHistory).values({ accountId: acc.id, toStatus: "ONGOING_ENGAGEMENT", changedBy: me.id, note: "Account registered" });
+    await tx.insert(t.accountStatusHistory).values({
+      accountId: acc.id,
+      toStatus: status,
+      changedBy: me.id,
+      note: pending ? "Account registered, sent to an Admin for verification" : "Account registered",
+    });
     const [cap] = await tx
       .insert(t.locationCaptures)
       .values({ accountId: acc.id, agentId: me.id, latitude: loc.lat, longitude: loc.lng, accuracyM: loc.accuracy, capturedAt: loc.capturedAt })
@@ -158,7 +183,7 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
   setTimeout(() => void geocodeCapture(captureId), 0);
   revalidatePath("/accounts");
   revalidatePath("/dashboard");
-  return ok("Account created.", accountId);
+  return ok(pending ? "Account created. An Admin will verify it before it's active." : "Account created.", accountId);
 }
 
 export async function updateAccount(id: string, _prev: ActionResult | null, f: FormData): Promise<ActionResult> {
@@ -167,7 +192,7 @@ export async function updateAccount(id: string, _prev: ActionResult | null, f: F
   if (!acc || !canEditAccount(me, acc)) return fail("You can't edit this account.");
   const v = validateCommon(f, acc.kind);
   if (Object.keys(v.errors).length) return fail("Some details need fixing.", v.errors);
-  const dup = await uniqueProblem(v.values.pesiAccountNo, v.values.statementAccountNo, id);
+  const dup = await uniqueProblem(v.values.pesiAccountNo, v.values.statementAccountNo, id, acc.kind === "INDIVIDUAL" ? v.values.phone : null);
   if (dup) return fail("That number is already in use.", dup);
 
   await db.transaction(async (tx) => {
@@ -176,12 +201,10 @@ export async function updateAccount(id: string, _prev: ActionResult | null, f: F
       await tx.insert(t.merchantProfiles).values({ accountId: id, ...v.merchant }).onConflictDoUpdate({ target: t.merchantProfiles.accountId, set: v.merchant });
     }
     if (acc.kind === "INDIVIDUAL") {
-      const set: Partial<typeof t.individualProfiles.$inferInsert> = { dateOfBirth: v.dob };
-      // Blank ID field on edit means "leave it as it is".
-      if (v.idNumber) Object.assign(set, { idNumberEnc: encryptField(v.idNumber), idLast4: v.idNumber.slice(-4) });
+      const set = { dateOfBirth: v.dob };
       await tx.insert(t.individualProfiles).values({ accountId: id, ...set }).onConflictDoUpdate({ target: t.individualProfiles.accountId, set });
     }
-    await tx.insert(t.auditLog).values({ actorId: me.id, action: "account.update", entity: "account", entityId: id, detail: { idChanged: Boolean(v.idNumber) } });
+    await tx.insert(t.auditLog).values({ actorId: me.id, action: "account.update", entity: "account", entityId: id, detail: { kind: acc.kind } });
   });
   revalidatePath(`/accounts/${id}`);
   revalidatePath("/accounts");
@@ -192,24 +215,93 @@ export async function changeAccountStatus(id: string, _prev: ActionResult | null
   const me = await requireUser();
   const acc = await findAccountFor(me, id);
   if (!acc || !canEditAccount(me, acc)) return fail("You can't change this account.");
-  const to = String(f.get("status") ?? "") as AccountStatus;
-  let hasId = false;
-  if (acc.kind === "INDIVIDUAL") {
-    const [p] = await db.select({ enc: t.individualProfiles.idNumberEnc }).from(t.individualProfiles).where(eq(t.individualProfiles.accountId, id));
-    hasId = Boolean(p?.enc);
-  }
-  const problem = statusChangeProblem({ kind: acc.kind, status: acc.status, pesiAccountNo: acc.pesiAccountNo, hasIdNumber: hasId }, to);
+  const chosen = String(f.get("status") ?? "") as AccountStatus;
+  const problem = statusChangeProblem({ kind: acc.kind, status: acc.status, pesiAccountNo: acc.pesiAccountNo }, chosen);
   if (problem) return fail(problem);
+  // A non-Admin activating a merchant or individual sends it to an Admin to verify.
+  const to = effectiveStatus(me, acc.kind, chosen);
+  const pending = to === "PENDING_VERIFICATION";
   const note = str(f, "note");
+  const now = new Date();
   await db.transaction(async (tx) => {
-    await tx.update(t.accounts).set({ status: to }).where(eq(t.accounts.id, id));
-    await tx.insert(t.accountStatusHistory).values({ accountId: id, fromStatus: acc.status, toStatus: to, changedBy: me.id, note });
+    await tx
+      .update(t.accounts)
+      .set({
+        status: to,
+        ...(pending ? { pendingFromStatus: acc.status, verificationRequestedAt: now, verificationRequestedBy: me.id } : {}),
+        ...(to === "ACTIVE" && me.role === "ADMIN" ? { verifiedAt: now, verifiedBy: me.id } : {}),
+      })
+      .where(eq(t.accounts.id, id));
+    await tx.insert(t.accountStatusHistory).values({
+      accountId: id,
+      fromStatus: acc.status,
+      toStatus: to,
+      changedBy: me.id,
+      note: pending ? ["Sent to an Admin for verification", note].filter(Boolean).join(" · ") : note,
+    });
   });
-  await audit(me.id, "account.status", "account", id, { from: acc.status, to });
+  await audit(me.id, pending ? "account.verification_request" : "account.status", "account", id, { from: acc.status, to });
   revalidatePath(`/accounts/${id}`);
   revalidatePath("/accounts");
   revalidatePath("/dashboard");
-  return ok("Status updated.");
+  return ok(pending ? "Sent for verification. An Admin will confirm before the account is active." : "Status updated.");
+}
+
+/** Admin confirms a merchant or individual: Pending verification → Active. */
+export async function verifyAccount(id: string): Promise<ActionResult> {
+  const me = await requireUser();
+  if (!canVerifyAccount(me)) return fail("Only Admins verify accounts.");
+  const acc = await findAccountFor(me, id);
+  if (!acc) return fail("Account not found.");
+  const now = new Date();
+  const done = await db.transaction(async (tx) => {
+    const updated = await tx
+      .update(t.accounts)
+      .set({ status: "ACTIVE", verifiedAt: now, verifiedBy: me.id, pendingFromStatus: null })
+      .where(and(eq(t.accounts.id, id), eq(t.accounts.status, "PENDING_VERIFICATION")))
+      .returning({ id: t.accounts.id });
+    if (!updated.length) return false;
+    await tx.insert(t.accountStatusHistory).values({ accountId: id, fromStatus: "PENDING_VERIFICATION", toStatus: "ACTIVE", changedBy: me.id, note: "Verified by Admin" });
+    return true;
+  });
+  if (!done) return fail("This account isn't waiting for verification.");
+  await audit(me.id, "account.verify", "account", id);
+  revalidatePath(`/accounts/${id}`);
+  revalidatePath("/accounts");
+  revalidatePath("/dashboard");
+  return ok(`${acc.name} verified and active.`);
+}
+
+/** Admin declines: the account goes back to where it was, with the reason on its record. */
+export async function declineVerification(id: string, reason = ""): Promise<ActionResult> {
+  const me = await requireUser();
+  if (!canVerifyAccount(me)) return fail("Only Admins verify accounts.");
+  if (!reason.trim()) return fail("Say why the account can't be verified, so the agent can fix it.");
+  const acc = await findAccountFor(me, id);
+  if (!acc) return fail("Account not found.");
+  if (acc.status !== "PENDING_VERIFICATION") return fail("This account isn't waiting for verification.");
+  const back = acc.pendingFromStatus && acc.pendingFromStatus !== "PENDING_VERIFICATION" ? acc.pendingFromStatus : "ONGOING_ENGAGEMENT";
+  const why = reason.trim().slice(0, 300);
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx.update(t.accounts).set({ status: back, pendingFromStatus: null }).where(eq(t.accounts.id, id));
+    await tx.insert(t.accountStatusHistory).values({ accountId: id, fromStatus: "PENDING_VERIFICATION", toStatus: back, changedBy: me.id, note: `Verification declined: ${why}` });
+    // On the activity feed too, so the agent sees what to fix.
+    await tx.insert(t.activities).values({
+      accountId: id,
+      type: "NOTE",
+      description: `Verification declined by ${me.name}: ${why}`,
+      status: "COMPLETED",
+      completedAt: now,
+      completedBy: me.id,
+      createdBy: me.id,
+    });
+  });
+  await audit(me.id, "account.verification_decline", "account", id, { reason: why, backTo: back });
+  revalidatePath(`/accounts/${id}`);
+  revalidatePath("/accounts");
+  revalidatePath("/dashboard");
+  return ok(`Verification declined. ${acc.name} is back to ${back === "DOCUMENT_COLLECTION" ? "Document collection" : "Ongoing engagement"}.`);
 }
 
 export async function reassignAccount(id: string, _prev: ActionResult | null, f: FormData): Promise<ActionResult> {
@@ -231,16 +323,3 @@ export async function reassignAccount(id: string, _prev: ActionResult | null, f:
   revalidatePath("/accounts");
   return ok(newOwner ? `Reassigned to ${newOwner.name}.` : "Account unassigned.");
 }
-
-/** Admin only: shows a full national ID number once, and logs who looked. */
-export async function revealIdNumber(accountId: string): Promise<{ value: string | null; error?: string }> {
-  const me = await requireUser();
-  if (!canViewFullIdNumber(me)) return { value: null, error: "Only Admins can view full ID numbers." };
-  const acc = await findAccountFor(me, accountId);
-  if (!acc) return { value: null, error: "Account not found." };
-  const [p] = await db.select({ enc: t.individualProfiles.idNumberEnc }).from(t.individualProfiles).where(eq(t.individualProfiles.accountId, accountId));
-  if (!p?.enc) return { value: null, error: "No ID number on file." };
-  await audit(me.id, "id_number.view", "account", accountId);
-  return { value: decryptField(p.enc) };
-}
-

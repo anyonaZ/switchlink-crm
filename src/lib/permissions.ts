@@ -80,9 +80,9 @@ export function canViewLocation(a: Actor, acc: AccountRef) {
   return isLeader(a) && sameTeam(a, acc.teamId);
 }
 
-/** Full national ID numbers: Admin only. Everyone else sees the last 4 digits. */
-export function canViewFullIdNumber(a: Actor) {
-  return isAdmin(a);
+/** Only Admins verify merchants and individuals before they become Active. */
+export function canVerifyAccount(a: Actor) {
+  return isAdmin(a) && a.status === "ACTIVE";
 }
 
 // --- Money ----------------------------------------------------------------
@@ -244,8 +244,12 @@ export function canSeeShare(a: Actor, s: { memberIds: string[]; memberTeamIds: (
 
 // --- Account status rules -------------------------------------------------
 export type AccountKind = "SCHOOL" | "CORPORATE" | "MERCHANT" | "INDIVIDUAL";
-export type AccountStatus = "ONGOING_ENGAGEMENT" | "DOCUMENT_COLLECTION" | "ACTIVE" | "INACTIVE";
+export type AccountStatus = "ONGOING_ENGAGEMENT" | "DOCUMENT_COLLECTION" | "PENDING_VERIFICATION" | "ACTIVE" | "INACTIVE";
 
+/**
+ * Statuses a person can choose for each kind of account. PENDING_VERIFICATION
+ * isn't in these lists: the system sets it (see effectiveStatus).
+ */
 export const STATUS_FLOW: Record<AccountKind, AccountStatus[]> = {
   MERCHANT: ["ONGOING_ENGAGEMENT", "DOCUMENT_COLLECTION", "ACTIVE", "INACTIVE"],
   INDIVIDUAL: ["ONGOING_ENGAGEMENT", "ACTIVE", "INACTIVE"],
@@ -253,11 +257,28 @@ export const STATUS_FLOW: Record<AccountKind, AccountStatus[]> = {
   CORPORATE: ["ONGOING_ENGAGEMENT", "ACTIVE", "INACTIVE"],
 };
 
+/** Merchants and individuals need an Admin's verification before they're Active. */
+export const NEEDS_VERIFICATION: AccountKind[] = ["MERCHANT", "INDIVIDUAL"];
+
+/**
+ * The status an account actually gets when someone sets `to`. A non-Admin
+ * making a merchant or individual Active sends it for verification instead.
+ */
+export function effectiveStatus(a: Pick<Actor, "role">, kind: AccountKind, to: AccountStatus): AccountStatus {
+  return to === "ACTIVE" && NEEDS_VERIFICATION.includes(kind) && a.role !== "ADMIN" ? "PENDING_VERIFICATION" : to;
+}
+
+/**
+ * Status of a newly registered account. An individual only needs a phone
+ * number, so it goes straight to verification (an Admin's own are Active).
+ */
+export function initialStatus(a: Pick<Actor, "role">, kind: AccountKind): AccountStatus {
+  return kind === "INDIVIDUAL" ? effectiveStatus(a, kind, "ACTIVE") : "ONGOING_ENGAGEMENT";
+}
+
 /** Returns null if the move is allowed, else the reason it isn't. */
-export function statusChangeProblem(
-  acc: { kind: AccountKind; status: AccountStatus; pesiAccountNo: string | null; hasIdNumber: boolean },
-  to: AccountStatus
-): string | null {
+export function statusChangeProblem(acc: { kind: AccountKind; status: AccountStatus; pesiAccountNo: string | null }, to: AccountStatus): string | null {
+  if (acc.status === "PENDING_VERIFICATION") return "This account is waiting for an Admin to verify it.";
   const allowed = STATUS_FLOW[acc.kind];
   if (!allowed.includes(to)) return "That status doesn't apply to this kind of account.";
   if (to === acc.status) return "The account already has that status.";
@@ -268,9 +289,6 @@ export function statusChangeProblem(
     if (to === "ACTIVE" && acc.status === "ONGOING_ENGAGEMENT") {
       return "Move the merchant to Document collection before making it active.";
     }
-  }
-  if (acc.kind === "INDIVIDUAL" && to === "ACTIVE" && !acc.hasIdNumber) {
-    return "Record the client's national ID number first.";
   }
   return null;
 }

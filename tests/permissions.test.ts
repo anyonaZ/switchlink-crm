@@ -9,8 +9,11 @@ import {
   canResetPassword,
   canUploadStatement,
   canViewAccount,
+  canVerifyAccount,
   canViewLocation,
   creatableRoles,
+  effectiveStatus,
+  initialStatus,
   statusChangeProblem,
   type Actor,
 } from "../src/lib/permissions";
@@ -86,13 +89,35 @@ test("work rolls up: an agent's BDO, a BDO themselves, nobody above", () => {
   assert.equal(bdoFor(null), null);
 });
 
-test("merchant status needs a 4-digit Pesi number; individuals need an ID", () => {
-  const m = { kind: "MERCHANT" as const, status: "ONGOING_ENGAGEMENT" as const, pesiAccountNo: null, hasIdNumber: false };
+test("merchant status needs a 4-digit Pesi number; individuals need nothing but a phone", () => {
+  const m = { kind: "MERCHANT" as const, status: "ONGOING_ENGAGEMENT" as const, pesiAccountNo: null };
   assert.match(statusChangeProblem(m, "DOCUMENT_COLLECTION")!, /4-digit/);
   assert.equal(statusChangeProblem({ ...m, pesiAccountNo: "3887" }, "DOCUMENT_COLLECTION"), null);
   assert.match(statusChangeProblem({ ...m, pesiAccountNo: "3887" }, "ACTIVE")!, /Document collection/);
-  const i = { kind: "INDIVIDUAL" as const, status: "ONGOING_ENGAGEMENT" as const, pesiAccountNo: null, hasIdNumber: false };
-  assert.match(statusChangeProblem(i, "ACTIVE")!, /ID number/);
+  const i = { kind: "INDIVIDUAL" as const, status: "ONGOING_ENGAGEMENT" as const, pesiAccountNo: null };
+  assert.equal(statusChangeProblem(i, "ACTIVE"), null, "no ID number needed any more");
   assert.match(statusChangeProblem(i, "DOCUMENT_COLLECTION")!, /doesn't apply/);
-  assert.equal(statusChangeProblem({ ...i, hasIdNumber: true }, "ACTIVE"), null);
+  assert.match(statusChangeProblem(i, "PENDING_VERIFICATION")!, /doesn't apply/, "nobody picks Pending by hand");
+  assert.match(statusChangeProblem({ ...i, status: "PENDING_VERIFICATION" }, "INACTIVE")!, /waiting for an Admin/);
+});
+
+test("activating a merchant or individual needs an Admin's verification", () => {
+  for (const who of [agentA, bdoA, leadA]) {
+    assert.equal(effectiveStatus(who, "MERCHANT", "ACTIVE"), "PENDING_VERIFICATION");
+    assert.equal(effectiveStatus(who, "INDIVIDUAL", "ACTIVE"), "PENDING_VERIFICATION");
+    assert.equal(effectiveStatus(who, "SCHOOL", "ACTIVE"), "ACTIVE", "schools and corporates don't need it");
+    assert.equal(effectiveStatus(who, "MERCHANT", "INACTIVE"), "INACTIVE");
+    assert.ok(!canVerifyAccount(who));
+  }
+  assert.equal(effectiveStatus(admin, "MERCHANT", "ACTIVE"), "ACTIVE");
+  assert.ok(canVerifyAccount(admin));
+  assert.ok(!canVerifyAccount({ ...admin, status: "INACTIVE" }));
+});
+
+test("new individuals wait for verification; other accounts start in Ongoing engagement", () => {
+  assert.equal(initialStatus(agentA, "INDIVIDUAL"), "PENDING_VERIFICATION");
+  assert.equal(initialStatus(bdoA, "INDIVIDUAL"), "PENDING_VERIFICATION");
+  assert.equal(initialStatus(admin, "INDIVIDUAL"), "ACTIVE");
+  assert.equal(initialStatus(agentA, "MERCHANT"), "ONGOING_ENGAGEMENT");
+  assert.equal(initialStatus(admin, "CORPORATE"), "ONGOING_ENGAGEMENT");
 });

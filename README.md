@@ -17,7 +17,8 @@ mobile phones in the field and is self-hosted on Switchlink's own server.
 - Account registration with mandatory GPS capture and automatic street-address lookup
 - Sales pipeline per product: School Now Pay Later (SNPL), Salary Advance and Quick Finance (QF)
 - Activity logging and scheduled follow-ups
-- KYC document storage and encrypted national ID numbers
+- KYC document storage for merchants
+- Admin verification of merchants and individuals before they become active
 - Quick Finance tracking from Pesi account statements, including limits, draws and cycles
 - A single disbursement ledger for all products, with full reversal history
 - Shared corporates, where approved disbursements are split between BDOs
@@ -44,6 +45,7 @@ The reporting structure is **Admin → Team Leader → BDO → Agent**.
 |---|---|---|---|---|
 | View and work on accounts | Own | Own and their Agents' | Team | All |
 | View captured locations | — | — | Team | All |
+| Verify merchants and individuals | — | — | — | ✓ |
 | Set QF limits | — | — | — | ✓ |
 | Upload Pesi statements | — | — | — | ✓ |
 | Record or reverse disbursements | — | — | — | ✓ |
@@ -70,11 +72,21 @@ tests.
 
 | Account type | Status flow | Requirement |
 |---|---|---|
-| Merchant | Ongoing engagement → Document collection → Active | The 4-digit Pesi account number before Document collection |
-| Individual | Ongoing engagement → Active | A national ID number before Active |
+| Merchant | Ongoing engagement → Document collection → Pending verification → Active | The 4-digit Pesi account number before Document collection |
+| Individual | Pending verification → Active | A phone number at registration |
 | School, Corporate | Ongoing engagement → Active | — |
 
 Any account can be marked Inactive.
+
+### Verification of merchants and individuals
+
+- **Merchants:** when an Agent, BDO or Team Leader sets a merchant to Active, it moves to **Pending verification** instead.
+- **Individuals:** only a name and phone number are needed. A new individual registered by anyone other than an Admin starts in **Pending verification**.
+- **The Admin's queue:** pending accounts are listed under **Accounts to verify** on the Admin dashboard, and on each account's page.
+- **Verify:** the account becomes Active, with who verified it and when recorded.
+- **Decline:** the account returns to its previous status. The reason is shown in its history and activity feed, so the agent can fix it and resubmit.
+- **Admins** who set an account to Active, or who register an individual themselves, activate it directly.
+- **Duplicate phones:** a phone number can belong to only one individual account.
 
 ### Pesi statements and Quick Finance
 
@@ -117,8 +129,7 @@ BDOs who close a corporate together can share its disbursements.
 - **Passwords:** hashed with Argon2id. Users must change their password at first sign-in.
 - **Lockout:** an account is locked for 15 minutes after 5 failed sign-in attempts.
 - **Sessions:** stored server-side. Users are signed out after 60 minutes of inactivity, or after 7 days at most.
-- **National ID numbers:** encrypted with AES-256-GCM. Only Admins can view them in full, and each view is logged.
-- **Audit log:** sensitive actions (sign-ins, money, status changes and approvals) are recorded in `audit_log`.
+- **Audit log:** sensitive actions (sign-ins, money, status changes, verifications and approvals) are recorded in `audit_log`.
 
 ---
 
@@ -152,7 +163,6 @@ from **Teams** and **People**.
 | Variable | Description |
 |---|---|
 | `POSTGRES_PASSWORD` | Database password. Use a long random value. |
-| `DATA_ENCRYPTION_KEY` | 32-byte key for encrypting ID numbers. Generate with `openssl rand -base64 32`. **Store a copy securely off the server; if it is lost, encrypted ID numbers can't be recovered.** |
 | `CRM_DOMAIN` | Public domain name, e.g. `crm.switchlinkafrica.com`. |
 | `APP_URL` | Public address, e.g. `https://crm.switchlinkafrica.com`. |
 | `APP_TIMEZONE` | Business timezone for dates and reporting periods. Default `Africa/Nairobi`. |
@@ -197,7 +207,7 @@ Node.js 22, PostgreSQL 16, Python 3 with `xlrd` (`pip install xlrd`).
 sudo -u postgres psql -c "CREATE ROLE crm LOGIN PASSWORD 'crm';" -c "CREATE DATABASE crm OWNER crm;"
 
 npm install
-cp .env.example .env              # set DATABASE_URL and DATA_ENCRYPTION_KEY
+cp .env.example .env              # set DATABASE_URL
 npm run db:migrate
 npm run db:seed -- "Full Name"    # creates the initial Admin account
 npm run dev                       # http://localhost:3000

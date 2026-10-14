@@ -13,6 +13,70 @@ import { APP_TIMEZONE } from "@/lib/config";
 import { bdoRollup, productTotals, periodRange } from "@/lib/reports";
 import { rankLeads } from "@/lib/lead-scoring";
 import { waitingOnMe } from "@/lib/shares";
+import { alias } from "drizzle-orm/pg-core";
+import { ActionButton } from "@/components/Interactive";
+import { declineVerification, verifyAccount } from "@/lib/actions/accounts";
+import { KindBadge } from "@/components/ui/Badges";
+
+/** Merchants and individuals waiting for an Admin to verify them (oldest first). */
+async function awaitingVerification(me: Actor) {
+  const owner = alias(t.users, "owner");
+  const requester = alias(t.users, "requester");
+  return db
+    .select({
+      id: t.accounts.id,
+      name: t.accounts.name,
+      kind: t.accounts.kind,
+      phone: t.accounts.phone,
+      requestedAt: t.accounts.verificationRequestedAt,
+      ownerName: owner.name,
+      requestedBy: requester.name,
+    })
+    .from(t.accounts)
+    .leftJoin(owner, eq(owner.id, t.accounts.ownerId))
+    .leftJoin(requester, eq(requester.id, t.accounts.verificationRequestedBy))
+    .where(and(accountScope(me), eq(t.accounts.status, "PENDING_VERIFICATION")))
+    .orderBy(asc(t.accounts.verificationRequestedAt))
+    .limit(100);
+}
+
+function VerificationQueue({ rows }: { rows: Awaited<ReturnType<typeof awaitingVerification>> }) {
+  if (!rows.length) return null;
+  return (
+    <Section
+      title={`Accounts to verify (${rows.length})`}
+      subtitle="Merchants and individuals an agent has marked active. They stay pending until you verify them."
+      action={<Link href="/accounts?status=PENDING_VERIFICATION" className="text-sm font-medium text-brand-700">All</Link>}
+    >
+      <ul className="card divide-y divide-slate-100 border-violet-200">
+        {rows.slice(0, 8).map((r) => (
+          <li key={r.id} className="px-4 py-3">
+            <Link href={`/accounts/${r.id}`} className="block active:opacity-70">
+              <span className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm font-medium text-ink">{r.name}</span>
+                <KindBadge kind={r.kind} />
+              </span>
+              <span className="mt-0.5 block truncate text-xs text-slate-500">
+                {r.phone ? `${r.phone} · ` : ""}
+                {r.ownerName ?? "Unassigned"}
+                {r.requestedBy && r.requestedBy !== r.ownerName ? ` · sent by ${r.requestedBy}` : ""}
+                {r.requestedAt ? ` · ${formatDateTime(r.requestedAt)}` : ""}
+              </span>
+            </Link>
+            <div className="mt-2 flex gap-2">
+              <ActionButton run={verifyAccount.bind(null, r.id)} confirmText={`Verify ${r.name} and make it active?`} className="btn-primary btn-sm">
+                Verify
+              </ActionButton>
+              <ActionButton run={declineVerification.bind(null, r.id)} prompt="What needs fixing before it can be verified?" className="btn-ghost btn-sm text-red-600">
+                Decline
+              </ActionButton>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
 
 export const metadata = { title: "Home" };
 
@@ -76,7 +140,7 @@ export default async function Dashboard() {
   if (me.role === "AGENT" || me.role === "BDO") {
     const rollup = me.role === "BDO" ? await bdoRollup(me, month.start, month.end) : null;
     const myGroup = rollup?.groups.find((g) => g.bdo.id === me.id) ?? null;
-    const [counts, opps] = await Promise.all([
+    const [counts, opps, [{ pendingN }]] = await Promise.all([
       db.select({ n: sql<number>`count(*)::int` }).from(t.accounts).where(accountScope(me)),
       db
         .select({ o: t.opportunities, accountName: t.accounts.name })
@@ -84,6 +148,7 @@ export default async function Dashboard() {
         .innerJoin(t.accounts, eq(t.accounts.id, t.opportunities.accountId))
         .where(and(accountScope(me), ne(t.opportunities.stage, "ACTIVE")))
         .limit(300),
+      db.select({ pendingN: sql<number>`count(*)::int` }).from(t.accounts).where(and(accountScope(me), eq(t.accounts.status, "PENDING_VERIFICATION"))),
     ]);
     const ids = opps.map((x) => x.o.id);
     const last = ids.length
@@ -102,6 +167,14 @@ export default async function Dashboard() {
           <h1 className="text-xl font-semibold text-ink">Hi {first}</h1>
           <p className="text-sm text-slate-500">Here&apos;s your day.</p>
         </div>
+        {pendingN > 0 && (
+          <Link href="/accounts?status=PENDING_VERIFICATION" className="card flex items-center justify-between gap-3 border-violet-200 bg-violet-50 p-4 text-sm active:opacity-70">
+            <span className="text-violet-900">
+              {pendingN} account{pendingN === 1 ? " is" : "s are"} waiting for an Admin to verify
+            </span>
+            <ChevronRight size={18} className="shrink-0 text-violet-700" />
+          </Link>
+        )}
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
           <Stat label="Due today" value={due.length - overdue} href="/follow-ups" tone={due.length - overdue ? "warn" : undefined} />
           <Stat label="Overdue" value={overdue} href="/follow-ups" tone={overdue ? "danger" : undefined} />
@@ -175,7 +248,7 @@ export default async function Dashboard() {
   }
 
   // Team Leader / Admin
-  const [{ groups }, staleStatements, shareRequests] = await Promise.all([
+  const [{ groups }, staleStatements, shareRequests, toVerify] = await Promise.all([
     bdoRollup(me, month.start, month.end),
     db.execute<{ id: string; name: string; last: string | null }>(sql`
       select accounts.id, accounts.name, max(su.created_at) as last
@@ -187,6 +260,7 @@ export default async function Dashboard() {
       having max(su.created_at) is null or max(su.created_at) < now() - interval '3 days'
        order by max(su.created_at) nulls first limit 6`),
     waitingOnMe(me),
+    me.role === "ADMIN" ? awaitingVerification(me) : Promise.resolve([]),
   ]);
 
   return (
@@ -195,6 +269,7 @@ export default async function Dashboard() {
         <h1 className="text-xl font-semibold text-ink">Hi {first}</h1>
         <p className="text-sm text-slate-500">{me.role === "ADMIN" ? "Every team" : "Your team"}, this month.</p>
       </div>
+      <VerificationQueue rows={toVerify} />
       {shareRequests > 0 && (
         <Link href="/shares" className="card flex items-center justify-between gap-3 border-amber-200 bg-amber-50 p-4 text-sm active:opacity-70">
           <span className="font-medium text-amber-900">

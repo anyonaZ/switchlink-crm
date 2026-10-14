@@ -10,6 +10,7 @@ export const KIND_LABELS = {
 export const STATUS_LABELS = {
   ONGOING_ENGAGEMENT: "Ongoing engagement",
   DOCUMENT_COLLECTION: "Document collection",
+  PENDING_VERIFICATION: "Pending verification",
   ACTIVE: "Active",
   INACTIVE: "Inactive",
 } as const;
@@ -17,6 +18,7 @@ export const STATUS_LABELS = {
 export const STATUS_STYLES = {
   ONGOING_ENGAGEMENT: "bg-sky-100 text-sky-800",
   DOCUMENT_COLLECTION: "bg-amber-100 text-amber-900",
+  PENDING_VERIFICATION: "bg-violet-100 text-violet-800",
   ACTIVE: "bg-green-100 text-green-800",
   INACTIVE: "bg-slate-100 text-slate-600",
 } as const;

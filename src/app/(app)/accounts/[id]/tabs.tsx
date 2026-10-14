@@ -4,8 +4,8 @@ import Sheet from "@/components/ui/Sheet";
 import ActionForm, { Field, Submit } from "@/components/ui/ActionForm";
 import { Empty, Section } from "@/components/ui/Page";
 import { ProductBadge, StageBadge, StatusBadge } from "@/components/ui/Badges";
-import { ActionButton, QuickDates, RevealId, StageSelect } from "@/components/Interactive";
-import { changeAccountStatus, reassignAccount, updateAccount } from "@/lib/actions/accounts";
+import { ActionButton, QuickDates, StageSelect } from "@/components/Interactive";
+import { changeAccountStatus, declineVerification, reassignAccount, updateAccount, verifyAccount } from "@/lib/actions/accounts";
 import { addComment, addContact, cancelFollowUp, completeFollowUp, createOpportunity, deleteContact, logActivity, scheduleFollowUp, updateOpportunity } from "@/lib/actions/crm";
 import { recordDisbursement, reverseDisbursement, setQfLimit, uploadKycDocument } from "@/lib/actions/money";
 import { ACTIVITY_LABELS, ACTIVITY_TYPES, PRODUCTS_FOR_KIND, PRODUCT_LABELS, ROLE_LABELS, STAGE_LABELS, STATUS_LABELS, type Stage } from "@/lib/labels";
@@ -29,13 +29,21 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 // --- Overview ---------------------------------------------------------------
+/** Short names for the status tracker, so four steps fit on a phone. */
+const STEP_LABELS: Record<Status, string> = {
+  ONGOING_ENGAGEMENT: "Engagement",
+  DOCUMENT_COLLECTION: "Documents",
+  PENDING_VERIFICATION: "Verification",
+  ACTIVE: "Active",
+  INACTIVE: "Inactive",
+};
 export function OverviewTab({
   acc,
   ownerName,
   editable,
   merchant,
   individual,
-  canRevealId,
+  canVerify,
   history,
   statusOptions,
   reassignTo,
@@ -45,22 +53,30 @@ export function OverviewTab({
   ownerName: string | null;
   editable: boolean;
   merchant: { businessType: string | null; registrationNo: string | null; kraPin: string | null; ownerName: string | null } | null;
-  individual: { idLast4: string | null; dateOfBirth: string | null } | null;
-  canRevealId: boolean;
+  individual: { dateOfBirth: string | null } | null;
+  canVerify: boolean;
   history: { id: string; from: Status | null; to: Status; at: Date; note: string | null; by: string | null }[];
   statusOptions: Status[];
   reassignTo: { id: string; name: string; role: keyof typeof ROLE_LABELS }[];
   sharing: SharingInfo | null;
 }) {
-  const flow = (acc.kind === "MERCHANT" ? ["ONGOING_ENGAGEMENT", "DOCUMENT_COLLECTION", "ACTIVE"] : ["ONGOING_ENGAGEMENT", "ACTIVE"]) as Status[];
+  const verified = acc.kind === "MERCHANT" || acc.kind === "INDIVIDUAL";
+  const flow = (
+    acc.kind === "MERCHANT"
+      ? ["ONGOING_ENGAGEMENT", "DOCUMENT_COLLECTION", "PENDING_VERIFICATION", "ACTIVE"]
+      : verified
+        ? ["ONGOING_ENGAGEMENT", "PENDING_VERIFICATION", "ACTIVE"]
+        : ["ONGOING_ENGAGEMENT", "ACTIVE"]
+  ) as Status[];
+  const pending = acc.status === "PENDING_VERIFICATION";
   const step = flow.indexOf(acc.status);
   return (
     <div className="space-y-5">
       <Section title="Status">
         <div className="card p-4">
-          <ol className="flex items-center gap-2">
+          <ol className="flex items-start gap-1.5">
             {flow.map((s, i) => (
-              <li key={s} className="flex flex-1 items-center gap-2">
+              <li key={s} className="flex min-w-0 flex-1 flex-col items-center gap-1 text-center">
                 <span
                   className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
                     acc.status === "INACTIVE" ? "bg-slate-200 text-slate-500" : i <= step ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-500"
@@ -68,18 +84,39 @@ export function OverviewTab({
                 >
                   {i + 1}
                 </span>
-                <span className={`text-xs leading-tight ${i === step ? "font-semibold text-ink" : "text-slate-500"}`}>{STATUS_LABELS[s]}</span>
+                <span className={`text-[11px] leading-tight ${i === step ? "font-semibold text-ink" : "text-slate-500"}`}>{STEP_LABELS[s]}</span>
               </li>
             ))}
           </ol>
           {acc.kind === "MERCHANT" && !acc.pesiAccountNo && acc.status === "ONGOING_ENGAGEMENT" && (
             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Add the 4-digit Pesi account number once the merchant signs up, to move to Document collection.</p>
           )}
+          {pending && (
+            <div className="mt-3 rounded-lg bg-violet-50 px-3 py-2 text-sm text-violet-900">
+              <p className="font-medium">Waiting for an Admin to verify this account.</p>
+              {acc.verificationRequestedAt && <p className="text-xs">Sent {formatDateTime(acc.verificationRequestedAt, true)}</p>}
+              {canVerify && (
+                <div className="mt-2 flex gap-2">
+                  <ActionButton run={verifyAccount.bind(null, acc.id)} confirmText={`Verify ${acc.name} and make it active?`} className="btn-primary btn-sm">
+                    Verify
+                  </ActionButton>
+                  <ActionButton run={declineVerification.bind(null, acc.id)} prompt="What needs fixing before it can be verified?" className="btn-ghost btn-sm text-red-600">
+                    Decline
+                  </ActionButton>
+                </div>
+              )}
+            </div>
+          )}
+          {/* Stays mounted while pending (button hidden) so the form can still confirm the change. */}
           {editable && statusOptions.length > 0 && (
-            <div className="mt-3">
+            <div className={pending ? "hidden" : "mt-3"}>
               <Sheet title="Change status" trigger="Change status" triggerClassName="btn-secondary w-full">
                 <ActionForm action={changeAccountStatus.bind(null, acc.id)}>
-                  <Field label="New status" name="status">
+                  <Field
+                  label="New status"
+                  name="status"
+                  hint={verified && !canVerify ? "Choosing Active sends the account to an Admin to verify first." : undefined}
+                >
                     <select id="status" name="status" className="input" defaultValue={statusOptions[0]}>
                       {statusOptions.map((s) => (
                         <option key={s} value={s}>
@@ -109,7 +146,7 @@ export function OverviewTab({
                   <input id="name" name="name" defaultValue={acc.name} required className="input" />
                 </Field>
                 <Field label="Phone" name="phone">
-                  <input id="phone" name="phone" type="tel" defaultValue={acc.phone ?? ""} className="input" />
+                  <input id="phone" name="phone" type="tel" defaultValue={acc.phone ?? ""} required={acc.kind === "INDIVIDUAL"} className="input" />
                 </Field>
                 <Field label="Email" name="email">
                   <input id="email" name="email" type="email" defaultValue={acc.email ?? ""} className="input" />
@@ -137,9 +174,6 @@ export function OverviewTab({
                 )}
                 {acc.kind === "INDIVIDUAL" && (
                   <>
-                    <Field label="National ID number" name="id_number" hint={individual?.idLast4 ? `On file: ••••${individual.idLast4}. Leave blank to keep it.` : undefined}>
-                      <input id="id_number" name="id_number" inputMode="numeric" autoComplete="off" className="input" />
-                    </Field>
                     <Field label="Date of birth" name="date_of_birth">
                       <input id="date_of_birth" name="date_of_birth" type="date" defaultValue={individual?.dateOfBirth ?? ""} className="input" />
                     </Field>
@@ -178,7 +212,6 @@ export function OverviewTab({
           )}
           {individual && (
             <>
-              <Row label="National ID">{canRevealId ? <RevealId accountId={acc.id} last4={individual.idLast4} /> : individual.idLast4 ? `••••${individual.idLast4}` : null}</Row>
               <Row label="Date of birth">{individual.dateOfBirth ? formatDate(individual.dateOfBirth) : null}</Row>
             </>
           )}
@@ -191,6 +224,7 @@ export function OverviewTab({
           <Row label="Where">{acc.locationText}</Row>
           <Row label="Agent">{ownerName ?? "Unassigned"}</Row>
           <Row label="Registered">{formatDate(acc.createdAt)}</Row>
+          {verified && acc.verifiedAt && <Row label="Verified">{formatDate(acc.verifiedAt)}</Row>}
         </dl>
       </Section>
 

@@ -2,11 +2,9 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Eye } from "lucide-react";
 import type { ActionResult } from "@/lib/action-result";
 import { useToast } from "@/components/ui/Toast";
 import { changeStage } from "@/lib/actions/crm";
-import { revealIdNumber } from "@/lib/actions/accounts";
 import { STAGES, STAGE_LABELS, type Stage } from "@/lib/labels";
 
 /** Stage dropdown that saves on change, with an instant (optimistic) update. */
@@ -84,33 +82,6 @@ export function ActionButton({
     >
       {pending ? "Working…" : children}
     </button>
-  );
-}
-
-export function RevealId({ accountId, last4 }: { accountId: string; last4: string | null }) {
-  const [value, setValue] = useState<string | null>(null);
-  const [pending, start] = useTransition();
-  const toast = useToast();
-  return (
-    <span className="inline-flex items-center gap-2">
-      <span className="font-mono">{value ?? (last4 ? `••••${last4}` : "—")}</span>
-      {!value && last4 && (
-        <button
-          type="button"
-          className="btn-ghost btn-sm px-2"
-          disabled={pending}
-          onClick={() =>
-            start(async () => {
-              const res = await revealIdNumber(accountId);
-              if (res.value) setValue(res.value);
-              else toast("error", res.error ?? "Couldn't show the ID.");
-            })
-          }
-        >
-          <Eye size={16} /> Show
-        </button>
-      )}
-    </span>
   );
 }
 

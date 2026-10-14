@@ -4,7 +4,7 @@ import { Mail, MessageCircle, Navigation, Phone } from "lucide-react";
 import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { loadAccountFor, loadPerson } from "@/lib/access";
-import { canEditAccount, canManageQf, canReassignAccount, canRequestShare, canViewFullIdNumber, canViewLocation, isSupervisor, STATUS_FLOW, userScope } from "@/lib/permissions";
+import { canEditAccount, canManageQf, canReassignAccount, canRequestShare, canVerifyAccount, canViewLocation, isSupervisor, STATUS_FLOW, userScope } from "@/lib/permissions";
 import { activeShare, sharesFor } from "@/lib/shares";
 import { creditOptions } from "@/lib/actions/money";
 import { PageHeader } from "@/components/ui/Page";
@@ -59,7 +59,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
     const [individual] =
       acc.kind === "INDIVIDUAL"
         ? await db
-            .select({ idLast4: t.individualProfiles.idLast4, dateOfBirth: t.individualProfiles.dateOfBirth })
+            .select({ dateOfBirth: t.individualProfiles.dateOfBirth })
             .from(t.individualProfiles)
             .where(eq(t.individualProfiles.accountId, id))
         : [];
@@ -108,7 +108,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
         editable={editable}
         merchant={merchant ?? null}
         individual={individual ?? null}
-        canRevealId={canViewFullIdNumber(me)}
+        canVerify={canVerifyAccount(me)}
         history={history}
         statusOptions={STATUS_FLOW[acc.kind].filter((s) => s !== acc.status)}
         reassignTo={reassignTo}
