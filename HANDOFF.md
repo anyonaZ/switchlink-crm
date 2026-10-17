@@ -59,7 +59,7 @@ unit-tested. List queries go through `accountScope()`, `userScope()` and
 | Profile (own name) | `src/app/(app)/profile`, `updateMyName` in `actions/auth.ts` |
 | Scripts | `scripts/seed.ts` (Admin only), `scripts/create-admin.ts` (random password), `scripts/migrate.ts`, `scripts/backup.sh` |
 | Verification | `effectiveStatus`/`initialStatus`/`canVerifyAccount` in `permissions.ts`; `verifyAccount`/`declineVerification` in `actions/accounts.ts`; queue on the Admin dashboard |
-| Tests | `tests/permissions.test.ts`, `tests/sharing.test.ts`, `tests/signature.test.ts`, `tests/statements.test.ts` (30 pass; 2 statement tests skip without the real `.xls` files in `STATEMENT_DIR`) |
+| Tests | `tests/permissions.test.ts`, `tests/sharing.test.ts`, `tests/signature.test.ts`, `tests/statements.test.ts` (31 pass; 2 statement tests skip without the real `.xls` files in `STATEMENT_DIR`) |
 
 ## 5. What was done in the last two sessions
 
@@ -217,6 +217,15 @@ that the forced password change and rename work.
       sortable), a split table on Reports, and new sections in the CSV export.
     - **Scope:** Admins see everyone; other roles see their own team's
       leaderboard. The CSV's leaderboard section uses the same scope.
+
+13. **Bulk upload opened to Team Leaders and BDOs** (17 October, later).
+    - **New rules** in `permissions.ts`: `canBulkUpload()` (Admin, Team
+      Leader, BDO) and `canAssignNewAccount()`. The second is now also used
+      by single-account creation, so both follow the same assignment rules.
+    - **Statuses:** individuals uploaded by Team Leaders or BDOs are
+      `PENDING_VERIFICATION` and land in the Admin's queue. Merchants start in
+      Ongoing engagement.
+    - **No GPS** is recorded for uploaded accounts, whoever uploads them.
 
 ## 6. How to run
 

@@ -23,7 +23,7 @@ export const NAV: Item[] = [
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { href: "/follow-ups", label: "Follow-ups", icon: CalendarCheck },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
-  { href: "/import", label: "Bulk upload", icon: Upload, roles: ["ADMIN"] },
+  { href: "/import", label: "Bulk upload", icon: Upload, roles: ["BDO", "TEAM_LEADER", "ADMIN"] },
   { href: "/statements", label: "Statements", icon: FileSpreadsheet, roles: ["ADMIN"] },
   { href: "/locations", label: "Locations", icon: MapPin, roles: ["TEAM_LEADER", "ADMIN"] },
   { href: "/shares", label: "Shared corporates", icon: Handshake, roles: ["BDO", "TEAM_LEADER", "ADMIN"] },

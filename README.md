@@ -48,7 +48,7 @@ The reporting structure is **Admin → Team Leader → BDO → Agent**.
 | View and work on accounts | Own | Own and their Agents' | Team | All |
 | View captured locations | — | — | Team | All |
 | Verify merchants and individuals | — | — | — | ✓ |
-| Bulk upload merchant and individual accounts | — | — | — | ✓ |
+| Bulk upload merchant and individual accounts | — | Assigned to themselves or their Agents | Assigned to their team's BDOs and Agents, or themselves | Assigned to anyone |
 | Leaderboard | Their team | Their team | Their team | Everyone, plus a Teams board |
 | Add corporates and merchants without a GPS location, assigned to anyone (including themselves) | — | — | — | ✓ |
 | Set QF limits | — | — | — | ✓ |
@@ -152,7 +152,8 @@ accounts closed.
 
 ### Bulk upload of merchants and individuals
 
-Admins can add many accounts at once under **Bulk upload**, from an Excel
+Admins, Team Leaders and BDOs can add many accounts at once under **Bulk
+upload**, from an Excel
 (`.xlsx`) or CSV file. The **Template** button downloads the expected columns.
 The file's column headings are recognised in common wordings.
 
@@ -168,7 +169,8 @@ The file's column headings are recognised in common wordings.
 
 **What uploaded accounts look like:**
 - Merchants start in Ongoing engagement.
-- Individuals are Active, verified by the uploading Admin.
+- Individuals are Active if an Admin uploaded them. If a Team Leader or BDO uploaded them, they are Pending verification and appear in the Admin's queue.
+- "Assign to" follows the same rules as adding a single account: a BDO can assign to themselves or their Agents; a Team Leader to themselves or the BDOs and Agents on their team; an Admin to anyone. Rows assigned to someone else are skipped with the reason.
 - Each account gets a Quick Finance opportunity.
 - No GPS location is recorded.
 - Uploading the same file again adds nothing new.

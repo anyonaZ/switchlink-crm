@@ -9,7 +9,7 @@ import path from "node:path";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
-import { initialStatus } from "@/lib/permissions";
+import { canAssignNewAccount, canBulkUpload, initialStatus } from "@/lib/permissions";
 import { STORAGE_DIR } from "@/lib/config";
 import { duplicateInFile, mapHeaders, nameKey, parseRow, phoneKey, type ImportKind, type ImportRow } from "@/lib/import/accounts";
 
@@ -42,7 +42,7 @@ type Pending = { by: string; fileName: string; createdAt: string; rows: (ImportR
 /** Step 1: read the file, check every row, and save nothing yet. */
 export async function previewImport(f: FormData): Promise<PreviewResult> {
   const me = await requireUser();
-  if (me.role !== "ADMIN") return { ok: false, error: "Only Admins can upload accounts in bulk." };
+  if (!canBulkUpload(me)) return { ok: false, error: "Only Admins, Team Leaders and BDOs can upload accounts in bulk." };
   const file = f.get("file");
   if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Choose a .csv or .xlsx file." };
   const ext = file.name.toLowerCase().endsWith(".xlsx") ? "xlsx" : file.name.toLowerCase().endsWith(".csv") ? "csv" : null;
@@ -83,13 +83,14 @@ export async function previewImport(f: FormData): Promise<PreviewResult> {
 
   // Who each account goes to: "Assign to" (email or full name), else the default owner.
   const people = await db
-    .select({ id: t.users.id, name: t.users.name, email: t.users.email, teamId: t.users.teamId, role: t.users.role })
+    .select({ id: t.users.id, name: t.users.name, email: t.users.email, teamId: t.users.teamId, role: t.users.role, reportsTo: t.users.reportsTo })
     .from(t.users)
     .where(eq(t.users.status, "ACTIVE"));
   const byKey = new Map<string, (typeof people)[number][]>();
   for (const p of people) for (const k of [p.email.toLowerCase(), nameKey(p.name)]) byKey.set(k, [...(byKey.get(k) ?? []), p]);
   const defaultOwner = people.find((p) => p.id === defaultOwnerId);
   if (!defaultOwner) return { ok: false, error: "The default person to assign accounts to wasn't found or is inactive." };
+  if (!canAssignNewAccount(me, defaultOwner)) return { ok: false, error: `You can't assign accounts to ${defaultOwner.name}.` };
 
   // What's already in the CRM.
   const pesis = rows.map((r) => r.pesi).filter((x): x is string => !!x);
@@ -112,8 +113,11 @@ export async function previewImport(f: FormData): Promise<PreviewResult> {
     let owner = defaultOwner;
     if (!reason && r.assignTo) {
       const hits = byKey.get(r.assignTo.includes("@") ? r.assignTo.toLowerCase() : nameKey(r.assignTo)) ?? [];
-      if (hits.length === 1) owner = hits[0];
-      else reason = hits.length ? `More than one person is called "${r.assignTo}"; use their email` : `No active user "${r.assignTo}" to assign to`;
+      if (hits.length === 1) {
+        owner = hits[0];
+        if (!canAssignNewAccount(me, owner))
+          reason = me.role === "BDO" ? `${owner.name} isn't one of your agents` : `You can't assign accounts to ${owner.name}`;
+      } else reason = hits.length ? `More than one person is called "${r.assignTo}"; use their email` : `No active user "${r.assignTo}" to assign to`;
     }
     if (reason) skipped.push({ row: r.row, name: r.name, reason });
     else ready.push({ ...r, ownerId: owner.id, teamId: owner.teamId });
@@ -138,7 +142,7 @@ export async function previewImport(f: FormData): Promise<PreviewResult> {
 /** Step 2: add the checked rows. All-or-nothing; rows that became duplicates meanwhile are skipped. */
 export async function commitImport(token: string): Promise<CommitResult> {
   const me = await requireUser();
-  if (me.role !== "ADMIN") return { ok: false, error: "Only Admins can upload accounts in bulk." };
+  if (!canBulkUpload(me)) return { ok: false, error: "Only Admins, Team Leaders and BDOs can upload accounts in bulk." };
   if (!/^[0-9a-f-]{36}$/i.test(token)) return { ok: false, error: "That upload has expired. Upload the file again." };
   const file = path.join(DIR, `${token}.json`);
   const pending = JSON.parse(await readFile(file, "utf8").catch(() => "null")) as Pending | null;

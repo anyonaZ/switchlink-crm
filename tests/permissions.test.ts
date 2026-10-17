@@ -7,6 +7,8 @@ import {
   canReassignAccount,
   canRecordDisbursement,
   canResetPassword,
+  canAssignNewAccount,
+  canBulkUpload,
   canSkipLocation,
   canUploadStatement,
   canViewAccount,
@@ -129,4 +131,22 @@ test("only Admins may add corporates and merchants without a GPS location", () =
   assert.ok(!canSkipLocation(admin, "SCHOOL"));
   assert.ok(!canSkipLocation(admin, "INDIVIDUAL"));
   for (const who of [leadA, bdoA, agentA]) assert.ok(!canSkipLocation(who, "CORPORATE"));
+});
+
+test("bulk upload: Admins, Team Leaders and BDOs; assignments follow the single-account rules", () => {
+  assert.ok(canBulkUpload(admin) && canBulkUpload(leadA) && canBulkUpload(bdoA));
+  assert.ok(!canBulkUpload(agentA));
+  assert.ok(!canBulkUpload({ ...bdoA, status: "INACTIVE" }));
+  // BDO: themselves and their own agents only
+  assert.ok(canAssignNewAccount(bdoA, { id: bdoA.id, role: "BDO", teamId: A }));
+  assert.ok(canAssignNewAccount(bdoA, agentA));
+  assert.ok(!canAssignNewAccount(bdoA, agentA2), "another BDO's agent");
+  assert.ok(!canAssignNewAccount(bdoA, bdoA2));
+  // Team Leader: BDOs and agents on their team
+  assert.ok(canAssignNewAccount(leadA, bdoA2) && canAssignNewAccount(leadA, agentA2));
+  assert.ok(!canAssignNewAccount(leadA, bdoB), "another team");
+  assert.ok(!canAssignNewAccount(leadA, { id: "lead2", role: "TEAM_LEADER", teamId: A }));
+  // Admin: anyone active
+  assert.ok(canAssignNewAccount(admin, bdoB));
+  assert.ok(!canAssignNewAccount(admin, { ...bdoB, status: "INACTIVE" }));
 });

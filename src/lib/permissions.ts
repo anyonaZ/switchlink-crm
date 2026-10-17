@@ -88,6 +88,25 @@ export function canSkipLocation(a: Pick<Actor, "role">, kind: AccountKind) {
   return a.role === "ADMIN" && (kind === "CORPORATE" || kind === "MERCHANT");
 }
 
+/** Who can upload merchant and individual accounts from a spreadsheet. */
+export function canBulkUpload(a: Actor) {
+  return a.status === "ACTIVE" && (isAdmin(a) || isLeader(a) || isBdo(a));
+}
+
+/**
+ * Who a new account (one at a time or uploaded) may be assigned to: yourself;
+ * for an Admin, anyone; for a Team Leader, BDOs and Agents on their team; for
+ * a BDO, their own Agents.
+ */
+export function canAssignNewAccount(a: Actor, owner: PersonRef & { status?: "ACTIVE" | "INACTIVE" }) {
+  if (owner.status && owner.status !== "ACTIVE") return false;
+  if (owner.id === a.id) return true;
+  if (isAdmin(a)) return true;
+  if (isLeader(a)) return sameTeam(a, owner.teamId) && (owner.role === "BDO" || owner.role === "AGENT");
+  if (isBdo(a)) return owner.role === "AGENT" && owner.reportsTo === a.id;
+  return false;
+}
+
 /** Only Admins verify merchants and individuals before they become Active. */
 export function canVerifyAccount(a: Actor) {
   return isAdmin(a) && a.status === "ACTIVE";

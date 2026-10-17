@@ -5,7 +5,7 @@ import { and, eq, ne, sql } from "drizzle-orm";
 import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { findAccountFor, loadPerson } from "@/lib/access";
-import { canEditAccount, canReassignAccount, canSkipLocation, canVerifyAccount, effectiveStatus, initialStatus, statusChangeProblem, type AccountKind, type AccountStatus } from "@/lib/permissions";
+import { canAssignNewAccount, canEditAccount, canReassignAccount, canSkipLocation, canVerifyAccount, effectiveStatus, initialStatus, statusChangeProblem, type AccountKind, type AccountStatus } from "@/lib/permissions";
 import { audit } from "@/lib/audit";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { geocodeCapture } from "@/lib/geo/worker";
@@ -122,11 +122,7 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
   if (requestedOwner && requestedOwner !== me.id) {
     const owner = await loadPerson(requestedOwner);
     if (!owner || owner.status !== "ACTIVE") return fail("That person wasn't found or is inactive.");
-    const allowed =
-      me.role === "ADMIN" ||
-      (me.role === "TEAM_LEADER" && owner.teamId === me.teamId && (owner.role === "BDO" || owner.role === "AGENT")) ||
-      (me.role === "BDO" && owner.role === "AGENT" && owner.reportsTo === me.id);
-    if (!allowed) return fail(me.role === "BDO" ? "You can only assign accounts to your own agents." : "You can't assign accounts to that person.");
+    if (!canAssignNewAccount(me, owner)) return fail(me.role === "BDO" ? "You can only assign accounts to your own agents." : "You can't assign accounts to that person.");
     ownerId = owner.id;
     teamId = owner.teamId;
   }
