@@ -59,7 +59,7 @@ unit-tested. List queries go through `accountScope()`, `userScope()` and
 | Profile (own name) | `src/app/(app)/profile`, `updateMyName` in `actions/auth.ts` |
 | Scripts | `scripts/seed.ts` (Admin only), `scripts/create-admin.ts` (random password), `scripts/migrate.ts`, `scripts/backup.sh` |
 | Verification | `effectiveStatus`/`initialStatus`/`canVerifyAccount` in `permissions.ts`; `verifyAccount`/`declineVerification` in `actions/accounts.ts`; queue on the Admin dashboard |
-| Tests | `tests/permissions.test.ts`, `tests/sharing.test.ts`, `tests/signature.test.ts`, `tests/statements.test.ts` (23 pass; 2 statement tests skip without the real `.xls` files in `STATEMENT_DIR`) |
+| Tests | `tests/permissions.test.ts`, `tests/sharing.test.ts`, `tests/signature.test.ts`, `tests/statements.test.ts` (30 pass; 2 statement tests skip without the real `.xls` files in `STATEMENT_DIR`) |
 
 ## 5. What was done in the last two sessions
 
@@ -190,6 +190,33 @@ that the forced password change and rename work.
       the user called the whole list corporates.
     - **Re-running:** the import is idempotent (skips existing names) and has a
       `--dry-run` mode.
+
+### Session of 17 October 2026
+
+11. **Bulk upload of merchant and individual accounts (Admin only), at
+    `/import`.**
+    - **Reading the file:** `tools/parse_sheet.py` reads `.xlsx` with openpyxl
+      (added to the Dockerfile) or `.csv` (`,` `;` or tab). It finds the header
+      row automatically (skipping title rows).
+    - **Rules:** in `src/lib/import/accounts.ts` (pure functions, tested in
+      `tests/import.test.ts`): heading aliases, phone normalisation (Excel's
+      dropped 0, +254), Pesi padded to 4 digits, and duplicates inside the file.
+    - **Actions:** `src/lib/actions/import.ts` → `previewImport()` checks
+      everything against the database and stores the checked rows in
+      `storage/imports/<token>.json`; `commitImport(token)` inserts them in one
+      transaction, re-checking for duplicates.
+    - **The page:** `src/app/(app)/import/` with `ImportForm.tsx` (it calls the
+      actions directly, no `useActionState`).
+    - **Template:** `GET /api/import/template` (Admin).
+12. **New business vs existing accounts, and a Leaderboard.**
+    - **Definition:** a disbursement is "new" when its account's first
+      non-reversed positive disbursement is within the period. Organisations =
+      SCHOOL+CORPORATE; merchants = MERCHANT+INDIVIDUAL.
+    - **Code:** `newVsExisting()` and `leaderboard()` in `src/lib/reports.ts`.
+    - **Where it shows:** `/leaderboard` (BDO, Agent, and Teams for Admin;
+      sortable), a split table on Reports, and new sections in the CSV export.
+    - **Scope:** Admins see everyone; other roles see their own team's
+      leaderboard. The CSV's leaderboard section uses the same scope.
 
 ## 6. How to run
 

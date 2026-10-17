@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Download } from "lucide-react";
 import { requireRole } from "@/lib/auth/session";
 import { Empty, PageHeader, Section, Stat } from "@/components/ui/Page";
-import { accountCounts, bdoRollup, parsePeriod, peopleBreakdown, PERIODS, periodRange, productTotals, teamBreakdown, type PersonRow } from "@/lib/reports";
+import { accountCounts, bdoRollup, newVsExisting, parsePeriod, peopleBreakdown, PERIODS, periodRange, productTotals, teamBreakdown, type PersonRow } from "@/lib/reports";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { KIND_LABELS, ROLE_LABELS, STATUS_LABELS } from "@/lib/labels";
 
@@ -12,11 +12,12 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const me = await requireRole(["BDO", "TEAM_LEADER", "ADMIN"]);
   const period = parsePeriod((await searchParams).period);
   const { start, end } = periodRange(period);
-  const [totals, people, teams, counts] = await Promise.all([
+  const [totals, people, teams, counts, split] = await Promise.all([
     productTotals(me, start, end),
     peopleBreakdown(me, start, end),
     me.role === "ADMIN" ? teamBreakdown(me, start, end) : Promise.resolve([]),
     accountCounts(me),
+    newVsExisting(me, start, end),
   ]);
   const { groups, others } = await bdoRollup(me, start, end, people);
   const kinds = Object.keys(KIND_LABELS) as (keyof typeof KIND_LABELS)[];
@@ -46,6 +47,42 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
         <Stat label="Quick Finance" value={formatMoney(totals.QUICK_FINANCE, { dash: false })} />
         <Stat label="School Now Pay Later" value={formatMoney(totals.SNPL, { dash: false })} />
         <Stat label="Salary Advance" value={formatMoney(totals.SALARY_ADVANCE, { dash: false })} />
+      </div>
+      <div className="card p-4 text-sm">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-medium text-ink">New business vs existing accounts</p>
+          <Link href={`/leaderboard?period=${period}`} className="text-sm font-medium text-brand-700">
+            Leaderboard
+          </Link>
+        </div>
+        <p className="mt-0.5 text-xs text-slate-500">New business = accounts that got their first disbursement in this period.</p>
+        <table className="mt-2 w-full text-sm">
+          <thead className="text-xs text-slate-500">
+            <tr>
+              <th className="py-1 text-left font-medium" />
+              <th className="py-1 text-right font-medium">New</th>
+              <th className="py-1 text-right font-medium">Existing</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 tabular-nums">
+            <tr>
+              <td className="py-1.5">Organisations</td>
+              <td className="py-1.5 text-right">{formatMoney(split.newOrg, { dash: false })}</td>
+              <td className="py-1.5 text-right">{formatMoney(split.existingOrg, { dash: false })}</td>
+            </tr>
+            <tr>
+              <td className="py-1.5">Merchants &amp; individuals</td>
+              <td className="py-1.5 text-right">{formatMoney(split.newMerchant, { dash: false })}</td>
+              <td className="py-1.5 text-right">{formatMoney(split.existingMerchant, { dash: false })}</td>
+            </tr>
+            <tr className="font-semibold">
+              <td className="py-1.5">Total</td>
+              <td className="py-1.5 text-right text-green-700">{formatMoney(split.newTotal, { dash: false })}</td>
+              <td className="py-1.5 text-right">{formatMoney(split.existingTotal, { dash: false })}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="mt-1 text-xs text-slate-500">{split.newAccounts} account{split.newAccounts === 1 ? "" : "s"} closed in this period.</p>
       </div>
       <div className="card p-4 text-sm">
         <p className="font-medium text-ink">Quick Finance usage</p>

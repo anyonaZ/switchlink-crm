@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
-import { bdoRollup, parsePeriod, peopleBreakdown, periodRange, productTotals } from "@/lib/reports";
+import { bdoRollup, leaderboard, newVsExisting, parsePeriod, peopleBreakdown, periodRange, productTotals } from "@/lib/reports";
 import { ROLE_LABELS } from "@/lib/labels";
 import { AUTHOR, SIGNATURE_ID, watermark } from "@/lib/signature";
 
@@ -18,7 +18,12 @@ export async function GET(req: NextRequest) {
   if (me.role === "AGENT") return NextResponse.json({ error: "Not allowed." }, { status: 403 });
   const period = parsePeriod(req.nextUrl.searchParams.get("period") ?? undefined);
   const { start, end } = periodRange(period);
-  const [totals, people] = await Promise.all([productTotals(me, start, end), peopleBreakdown(me, start, end)]);
+  const [totals, people, split, board] = await Promise.all([
+    productTotals(me, start, end),
+    peopleBreakdown(me, start, end),
+    newVsExisting(me, start, end),
+    leaderboard(me, start, end, "bdo", "new"),
+  ]);
   const { groups } = await bdoRollup(me, start, end, people);
   const nameOf = new Map(people.map((p) => [p.id, p.name]));
   const out = [
@@ -33,6 +38,17 @@ export async function GET(req: NextRequest) {
     line(["Total", totals.total]),
     line(["QF draws", totals.qfDraws]),
     line(["QF cycles", totals.qfCycles.toFixed(2)]),
+    "",
+    line(["New business vs existing accounts (new = first disbursement in this period)"]),
+    line(["", "New (KES)", "Existing (KES)"]),
+    line(["Organisations (schools & corporates)", split.newOrg, split.existingOrg]),
+    line(["Merchants & individuals", split.newMerchant, split.existingMerchant]),
+    line(["Total", split.newTotal, split.existingTotal]),
+    line(["Accounts closed", split.newAccounts]),
+    "",
+    line(["Leaderboard (BDOs, including their agents)"]),
+    line(["Rank", "BDO", "Team", "New orgs (KES)", "New merchants (KES)", "Existing orgs (KES)", "Existing merchants (KES)", "Accounts closed", "Total (KES)"]),
+    ...board.map((r, i) => line([i + 1, r.name, r.sub, r.newOrg, r.newMerchant, r.existingOrg, r.existingMerchant, r.newAccounts, r.total])),
     "",
     line(["BDO totals (including their agents)"]),
     line(["BDO", "Team", "Agents", "QF (KES)", "QF cycles", "Times hit limit", "SNPL (KES)", "Salary Advance (KES)", "Total (KES)", "New accounts", "Activities"]),

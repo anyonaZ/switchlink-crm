@@ -240,3 +240,101 @@ export async function accountCounts(me: Actor) {
     select a.kind, a.status, count(*) as n from accounts a where ${accountScopeSql(me)} group by a.kind, a.status`);
   return rows.map((r) => ({ kind: r.kind, status: r.status, n: n(r.n) }));
 }
+
+// ---------------------------------------------------------------------------
+// New business vs existing accounts
+// ---------------------------------------------------------------------------
+/**
+ * A disbursement is NEW BUSINESS when its account got its first disbursement
+ * in the reporting period (a newly closed account); otherwise it is from an
+ * EXISTING account (closed before the period). Reversed entries don't count
+ * as an account's first disbursement. Organisations = schools and
+ * corporates; merchants = merchants and individuals (Quick Finance).
+ */
+const FIRSTS = sql`select d0.account_id, min(d0.disbursed_at) as first_at
+                     from disbursements d0
+                    where d0.amount > 0 and not exists (select 1 from disbursements r0 where r0.reverses_id = d0.id)
+                    group by d0.account_id`;
+
+export interface SplitTotals {
+  newOrg: number;
+  newMerchant: number;
+  existingOrg: number;
+  existingMerchant: number;
+  newAccounts: number;
+  newTotal: number;
+  existingTotal: number;
+  total: number;
+}
+const splitSelect = (start: Date) => sql`
+  coalesce(sum(d.amount) filter (where f.first_at >= ${start.toISOString()}::timestamptz and a.kind in ('SCHOOL', 'CORPORATE')), 0) as new_org,
+  coalesce(sum(d.amount) filter (where f.first_at >= ${start.toISOString()}::timestamptz and a.kind in ('MERCHANT', 'INDIVIDUAL')), 0) as new_mer,
+  coalesce(sum(d.amount) filter (where (f.first_at is null or f.first_at < ${start.toISOString()}::timestamptz) and a.kind in ('SCHOOL', 'CORPORATE')), 0) as old_org,
+  coalesce(sum(d.amount) filter (where (f.first_at is null or f.first_at < ${start.toISOString()}::timestamptz) and a.kind in ('MERCHANT', 'INDIVIDUAL')), 0) as old_mer,
+  count(distinct d.account_id) filter (where f.first_at >= ${start.toISOString()}::timestamptz and d.amount > 0) as new_accounts`;
+const toSplit = (r: Record<string, string | null> | undefined): SplitTotals => {
+  const s = { newOrg: n(r?.new_org), newMerchant: n(r?.new_mer), existingOrg: n(r?.old_org), existingMerchant: n(r?.old_mer), newAccounts: n(r?.new_accounts) };
+  return { ...s, newTotal: s.newOrg + s.newMerchant, existingTotal: s.existingOrg + s.existingMerchant, total: s.newOrg + s.newMerchant + s.existingOrg + s.existingMerchant };
+};
+
+/** Totals for what this person may see in reports (same scope as the rest of Reports). */
+export async function newVsExisting(me: Actor, start: Date, end: Date): Promise<SplitTotals> {
+  const [r] = await db.execute<Record<string, string | null>>(sql`
+    with f as (${FIRSTS})
+    select ${splitSelect(start)}
+      from disbursements d join accounts a on a.id = d.account_id left join f on f.account_id = d.account_id
+     where ${ledgerScope(me)} and d.disbursed_at >= ${start.toISOString()}::timestamptz and d.disbursed_at < ${end.toISOString()}::timestamptz`);
+  return toSplit(r);
+}
+
+export type Board = "bdo" | "agent" | "team";
+export const BOARDS: { value: Board; label: string }[] = [
+  { value: "bdo", label: "BDOs" },
+  { value: "agent", label: "Agents" },
+  { value: "team", label: "Teams" },
+];
+export type BoardSort = "new" | "existing" | "total" | "accounts";
+export interface BoardRow extends SplitTotals {
+  id: string;
+  name: string;
+  sub: string | null;
+  inactive: boolean;
+}
+
+/**
+ * Rankings for the leaderboard. Admins see everyone; everyone else sees their
+ * own team. BDO figures include their agents (the BDO stored on each ledger
+ * row), teams use the team stored on each row.
+ */
+export async function leaderboard(me: Actor, start: Date, end: Date, board: Board, sort: BoardSort): Promise<BoardRow[]> {
+  const scope =
+    me.role === "ADMIN" ? sql`true` : me.teamId ? sql`d.credited_team_id = ${me.teamId}` : sql`(d.credited_to = ${me.id} or d.credited_bdo_id = ${me.id})`;
+  const key = board === "bdo" ? sql`d.credited_bdo_id` : board === "agent" ? sql`d.credited_to` : sql`d.credited_team_id`;
+  const money = await db.execute<Record<string, string | null>>(sql`
+    with f as (${FIRSTS})
+    select ${key} as k, ${splitSelect(start)}
+      from disbursements d join accounts a on a.id = d.account_id left join f on f.account_id = d.account_id
+     where ${scope} and ${key} is not null
+       and d.disbursed_at >= ${start.toISOString()}::timestamptz and d.disbursed_at < ${end.toISOString()}::timestamptz
+     group by 1`);
+  const byKey = new Map(money.map((m) => [m.k!, toSplit(m)]));
+
+  // Everyone who could be on the board, so people with nothing yet still appear.
+  const people =
+    board === "team"
+      ? await db.execute<{ id: string; name: string; sub: string | null; inactive: boolean }>(sql`
+          select tm.id, tm.name, (select string_agg(u.name, ', ') from users u where u.team_id = tm.id and u.role = 'TEAM_LEADER' and u.status = 'ACTIVE') as sub, false as inactive
+            from teams tm where ${me.role === "ADMIN" ? sql`true` : me.teamId ? sql`tm.id = ${me.teamId}` : sql`false`}`)
+      : await db.execute<{ id: string; name: string; sub: string | null; inactive: boolean }>(sql`
+          select u.id, u.name, tm.name as sub, (u.status <> 'ACTIVE') as inactive
+            from users u left join teams tm on tm.id = u.team_id
+           where u.role = ${board === "bdo" ? "BDO" : "AGENT"}
+             and ${me.role === "ADMIN" ? sql`true` : me.teamId ? sql`u.team_id = ${me.teamId}` : sql`u.id = ${me.id}`}`);
+  const empty = toSplit(undefined);
+  const rows: BoardRow[] = people
+    .map((p) => ({ id: p.id, name: p.name, sub: p.sub, inactive: Boolean(p.inactive), ...(byKey.get(p.id) ?? empty) }))
+    // Inactive people only stay on the board if they earned something in the period.
+    .filter((r) => !r.inactive || r.total !== 0);
+  const metric = (r: BoardRow) => (sort === "existing" ? r.existingTotal : sort === "total" ? r.total : sort === "accounts" ? r.newAccounts : r.newTotal);
+  return rows.sort((a, b) => metric(b) - metric(a) || b.total - a.total || a.name.localeCompare(b.name));
+}

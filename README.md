@@ -23,6 +23,8 @@ mobile phones in the field and is self-hosted on Switchlink's own server.
 - A single disbursement ledger for all products, with full reversal history
 - Shared corporates, where approved disbursements are split between BDOs
 - Role-based reporting by person, BDO and team, with CSV export
+- A leaderboard separating new business (newly closed accounts) from existing accounts
+- Bulk upload of merchant and individual accounts from Excel or CSV
 - Installable as an app on phones (PWA), with an offline notice
 
 **Technology**
@@ -46,6 +48,8 @@ The reporting structure is **Admin → Team Leader → BDO → Agent**.
 | View and work on accounts | Own | Own and their Agents' | Team | All |
 | View captured locations | — | — | Team | All |
 | Verify merchants and individuals | — | — | — | ✓ |
+| Bulk upload merchant and individual accounts | — | — | — | ✓ |
+| Leaderboard | Their team | Their team | Their team | Everyone, plus a Teams board |
 | Add corporates and merchants without a GPS location, assigned to anyone (including themselves) | — | — | — | ✓ |
 | Set QF limits | — | — | — | ✓ |
 | Upload Pesi statements | — | — | — | ✓ |
@@ -124,6 +128,50 @@ BDOs who close a corporate together can share its disbursements.
 4. **Reverse:** reversing a split disbursement reverses every portion.
 5. **End:** an Admin can end a share. Disbursements recorded earlier are
    unaffected; later ones are credited to the account's own agent.
+
+### New business and existing accounts
+
+Disbursements are split into two groups, both on the **Leaderboard** and in **Reports**:
+
+- **New business:** money disbursed to accounts whose first disbursement falls in the selected period, i.e. newly closed accounts.
+- **Existing accounts:** money disbursed to accounts that were first disbursed before the period.
+
+Each group is shown separately for **organisations** (schools and corporates:
+SNPL and Salary Advance) and **merchants and individuals** (Quick Finance). A
+reversed disbursement doesn't count as an account's first one.
+
+**Leaderboard boards:**
+- **BDOs:** each BDO's figures include their Agents' work.
+- **Agents.**
+- **Teams:** Admins only.
+
+**Ranking:** by new business, existing accounts, total, or the number of
+accounts closed.
+
+**Who sees what:** Admins see everyone; all other roles see their own team.
+
+### Bulk upload of merchants and individuals
+
+Admins can add many accounts at once under **Bulk upload**, from an Excel
+(`.xlsx`) or CSV file. The **Template** button downloads the expected columns.
+The file's column headings are recognised in common wordings.
+
+**Columns:**
+- **Required:** Type (Merchant or Individual), Name, and Phone for individuals.
+- **Optional:** Email, Owner name, Business type, Pesi account no, KRA PIN, Registration no, Location and Assign to (an active user's email or full name).
+
+**How the upload works:**
+1. **Check file:** every row is validated and shown before anything is saved. Rows with problems are listed with the reason.
+2. **Skipped rows:** a row is skipped if an individual has no phone, a Pesi number isn't 4 digits, the type is unknown, the person to assign to isn't found, or the account is already in the CRM (same name, Pesi number, or an individual's phone).
+3. **Notes:** smaller problems, such as an invalid email, drop that field and add a note on the account.
+4. **Confirm:** the checked rows are added together.
+
+**What uploaded accounts look like:**
+- Merchants start in Ongoing engagement.
+- Individuals are Active, verified by the uploading Admin.
+- Each account gets a Quick Finance opportunity.
+- No GPS location is recorded.
+- Uploading the same file again adds nothing new.
 
 ### Security
 
