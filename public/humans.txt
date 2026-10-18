@@ -1,0 +1,6 @@
+/* SOFTWARE */
+Product: Switchlink CRM
+Built by: Anyonaz NewTech
+Copyright: (c) 2026 Anyonaz NewTech. All rights reserved.
+Signature: SLCRM-ANZ-2026-22618b25b6481b46c0702c9c
+License: Proprietary. Built for Switchlink Africa.

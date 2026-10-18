@@ -1,0 +1,11 @@
+# Caddy gets and renews a free Let's Encrypt certificate automatically.
+# CRM_DOMAIN must point at this office's public IP, with ports 80 and 443
+# forwarded to this server.
+{$CRM_DOMAIN} {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+	request_body {
+		max_size 15MB
+	}
+	reverse_proxy app:3000
+}
