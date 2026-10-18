@@ -23,7 +23,9 @@ mobile phones in the field and is self-hosted on Switchlink's own server.
 - A single disbursement ledger for all products, with full reversal history
 - Shared corporates, where approved disbursements are split between BDOs
 - Role-based reporting by person, BDO and team, with CSV export
-- A leaderboard separating new business (newly closed accounts) from existing accounts
+- A leaderboard separating new business (newly closed accounts) from existing accounts, with conversion rates
+- Weekly targets for BDOs and Agents, rolled up by BDO and team, with progress on every dashboard
+- Automatic removal of individual accounts not activated within 30 days
 - Bulk upload of merchant and individual accounts from Excel or CSV
 - Installable as an app on phones (PWA), with an offline notice
 
@@ -50,6 +52,8 @@ The reporting structure is **Admin → Team Leader → BDO → Agent**.
 | Verify merchants and individuals | — | — | — | ✓ |
 | Bulk upload merchant and individual accounts | — | Assigned to themselves or their Agents | Assigned to their team's BDOs and Agents, or themselves | Assigned to anyone |
 | Leaderboard | Their team | Their team | Their team | Everyone, plus a Teams board |
+| Conversion rate | Own | Own and their Agents' | Team | All, by person and team |
+| Weekly targets | Set own (required every week) | Set own (required every week); see their Agents' | See the team's, by BDO | See everyone's, by team |
 | Add corporates and merchants without a GPS location, assigned to anyone (including themselves) | — | — | — | ✓ |
 | Set QF limits | — | — | — | ✓ |
 | Upload Pesi statements | — | — | — | ✓ |
@@ -145,10 +149,45 @@ reversed disbursement doesn't count as an account's first one.
 - **Agents.**
 - **Teams:** Admins only.
 
-**Ranking:** by new business, existing accounts, total, or the number of
-accounts closed.
+- **Team Leaders:** their own accounts.
+
+**Ranking:** by new business, existing accounts, total, the number of
+accounts closed, or conversion rate.
 
 **Who sees what:** Admins see everyone; all other roles see their own team.
+
+### Conversion rate
+
+The conversion rate is the percentage of accounts **added in a period** that
+have become **Active**. It is shown on every dashboard (this month) and on the
+Leaderboard for each person and team (for the selected period), with the counts
+behind it, e.g. `37.5% (3/8)`.
+
+- An Agent's rate covers their own accounts; a BDO's includes their Agents'; a team's covers everyone on it.
+- Individuals deleted for not being activated count as added but not converted.
+
+### Individuals not activated within 30 days
+
+An individual account that hasn't become Active within **30 days** of being
+added is deleted automatically. This applies to every user's accounts.
+
+- Anyone adding an individual (one at a time or by bulk upload) is told the deletion date, and the account's page shows it until the account is activated.
+- Dashboards list individuals due to be deleted within the next 7 days.
+- Accounts with any disbursement or Pesi statement line are never deleted.
+- A record of each deletion is kept, so conversion rates still count it.
+- The check runs shortly after the server starts and then every hour.
+
+### Weekly targets
+
+BDOs and Agents set targets for the week (Monday to Sunday, Nairobi time):
+the number of **individuals**, **merchants** and **corporates** to close, and
+the **disbursement value**.
+
+- **Required:** until the week's targets are set, a BDO or Agent is taken to the Targets page whenever they open any other page.
+- **Editing:** targets can be changed on the day they were set, and are locked after that.
+- **Progress:** dashboards show progress against each target. An account counts as closed in the week it first became Active, for its current owner. Disbursed is the amount credited to the person that week.
+- **Roll-up:** an Agent's targets and results add up into their BDO's, and every BDO's and Agent's into the team's.
+- **Visibility:** BDOs see their Agents' targets; Team Leaders see each BDO (with their Agents) and the team total; Admins see every team. Anyone who hasn't set targets is flagged **Not set**. Previous weeks can be browsed.
 
 ### Bulk upload of merchants and individuals
 
@@ -169,7 +208,7 @@ The file's column headings are recognised in common wordings.
 
 **What uploaded accounts look like:**
 - Merchants start in Ongoing engagement.
-- Individuals are Active if an Admin uploaded them. If a Team Leader or BDO uploaded them, they are Pending verification and appear in the Admin's queue.
+- Individuals are Active if an Admin uploaded them. If a Team Leader or BDO uploaded them, they are Pending verification and appear in the Admin's queue, and are deleted if not activated within 30 days.
 - "Assign to" follows the same rules as adding a single account: a BDO can assign to themselves or their Agents; a Team Leader to themselves or the BDOs and Agents on their team; an Admin to anyone. Rows assigned to someone else are skipped with the reason.
 - Each account gets a Quick Finance opportunity.
 - No GPS location is recorded.
@@ -331,6 +370,8 @@ Existing migrations must never be edited.
 | `src/lib/actions/` | Server actions (accounts, CRM, money, statements, people, sharing, authentication) |
 | `src/lib/db/schema.ts` | Database schema |
 | `src/lib/reports.ts` | Reporting queries |
+| `src/lib/targets.ts`, `src/lib/targets-data.ts` | Weekly target rules and progress queries |
+| `src/lib/retention.ts` | Automatic removal of individuals not activated in time |
 | `src/lib/statements/` | Statement analysis and import |
 | `tools/parse_statement.py` | Pesi statement reader |
 | `drizzle/` | Database migrations |

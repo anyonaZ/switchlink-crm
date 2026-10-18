@@ -287,18 +287,82 @@ export async function newVsExisting(me: Actor, start: Date, end: Date): Promise<
   return toSplit(r);
 }
 
-export type Board = "bdo" | "agent" | "team";
+export type Board = "bdo" | "agent" | "tl" | "team";
 export const BOARDS: { value: Board; label: string }[] = [
   { value: "bdo", label: "BDOs" },
   { value: "agent", label: "Agents" },
+  { value: "tl", label: "Team Leaders" },
   { value: "team", label: "Teams" },
 ];
-export type BoardSort = "new" | "existing" | "total" | "accounts";
-export interface BoardRow extends SplitTotals {
+export type BoardSort = "new" | "existing" | "total" | "accounts" | "conversion";
+export interface Conversion {
+  /** Accounts added in the period (including individuals later deleted for not being activated). */
+  added: number;
+  /** Of those, how many have become Active. */
+  converted: number;
+  /** Percentage, one decimal; null when nothing was added. */
+  rate: number | null;
+}
+export interface BoardRow extends SplitTotals, Conversion {
   id: string;
   name: string;
   sub: string | null;
   inactive: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Conversion rates
+// ---------------------------------------------------------------------------
+/**
+ * Conversion = accounts added in the period that went on to become Active,
+ * as a share of all accounts added in the period. Accounts are credited to
+ * their current owner; individuals deleted for not being activated still
+ * count as added (not converted).
+ */
+const ADDED = (start: Date, end: Date) => sql`
+  select a.owner_id as uid, a.team_id,
+         exists (select 1 from account_status_history h where h.account_id = a.id and h.to_status = 'ACTIVE') as won
+    from accounts a
+   where a.created_at >= ${start.toISOString()}::timestamptz and a.created_at < ${end.toISOString()}::timestamptz
+  union all
+  select x.owner_id, x.team_id, false
+    from account_deletions x
+   where x.account_created_at >= ${start.toISOString()}::timestamptz and x.account_created_at < ${end.toISOString()}::timestamptz`;
+const toConversion = (added: number, converted: number): Conversion => ({ added, converted, rate: added > 0 ? Math.round((converted / added) * 1000) / 10 : null });
+
+async function conversionBy(me: Actor, start: Date, end: Date, board: Board): Promise<Map<string, Conversion>> {
+  const scope = me.role === "ADMIN" ? sql`true` : me.teamId ? sql`r.team_id = ${me.teamId}` : sql`r.uid = ${me.id}`;
+  const key =
+    board === "team" ? sql`r.team_id` : board === "bdo" ? sql`case when u.role = 'BDO' then u.id when u.role = 'AGENT' then u.reports_to end` : sql`r.uid`;
+  const rows = await db.execute<{ k: string | null; added: string; converted: string }>(sql`
+    select ${key} as k, count(*) as added, count(*) filter (where r.won) as converted
+      from (${ADDED(start, end)}) r left join users u on u.id = r.uid
+     where ${scope}
+     group by 1`);
+  return new Map(rows.filter((r) => r.k).map((r) => [r.k!, toConversion(n(r.added), n(r.converted))]));
+}
+
+/**
+ * This person's own conversion: an Agent's accounts; a BDO's and their
+ * Agents'; a Team Leader's team; for Admins, everyone.
+ */
+export async function myConversion(me: Actor, start: Date, end: Date): Promise<Conversion & { label: string }> {
+  const filter =
+    me.role === "ADMIN"
+      ? sql`true`
+      : me.role === "TEAM_LEADER"
+        ? me.teamId
+          ? sql`r.team_id = ${me.teamId}`
+          : sql`r.uid = ${me.id}`
+        : me.role === "BDO"
+          ? sql`(r.uid = ${me.id} or u.reports_to = ${me.id})`
+          : sql`r.uid = ${me.id}`;
+  const [row] = await db.execute<{ added: string; converted: string }>(sql`
+    select count(*) as added, count(*) filter (where r.won) as converted
+      from (${ADDED(start, end)}) r left join users u on u.id = r.uid
+     where ${filter}`);
+  const label = me.role === "ADMIN" ? "Conversion (everyone)" : me.role === "TEAM_LEADER" ? "Team conversion" : me.role === "BDO" ? "Conversion (you + agents)" : "My conversion";
+  return { ...toConversion(n(row?.added), n(row?.converted)), label };
 }
 
 /**
@@ -309,7 +373,7 @@ export interface BoardRow extends SplitTotals {
 export async function leaderboard(me: Actor, start: Date, end: Date, board: Board, sort: BoardSort): Promise<BoardRow[]> {
   const scope =
     me.role === "ADMIN" ? sql`true` : me.teamId ? sql`d.credited_team_id = ${me.teamId}` : sql`(d.credited_to = ${me.id} or d.credited_bdo_id = ${me.id})`;
-  const key = board === "bdo" ? sql`d.credited_bdo_id` : board === "agent" ? sql`d.credited_to` : sql`d.credited_team_id`;
+  const key = board === "bdo" ? sql`d.credited_bdo_id` : board === "team" ? sql`d.credited_team_id` : sql`d.credited_to`;
   const money = await db.execute<Record<string, string | null>>(sql`
     with f as (${FIRSTS})
     select ${key} as k, ${splitSelect(start)}
@@ -318,6 +382,7 @@ export async function leaderboard(me: Actor, start: Date, end: Date, board: Boar
        and d.disbursed_at >= ${start.toISOString()}::timestamptz and d.disbursed_at < ${end.toISOString()}::timestamptz
      group by 1`);
   const byKey = new Map(money.map((m) => [m.k!, toSplit(m)]));
+  const conv = await conversionBy(me, start, end, board);
 
   // Everyone who could be on the board, so people with nothing yet still appear.
   const people =
@@ -328,13 +393,14 @@ export async function leaderboard(me: Actor, start: Date, end: Date, board: Boar
       : await db.execute<{ id: string; name: string; sub: string | null; inactive: boolean }>(sql`
           select u.id, u.name, tm.name as sub, (u.status <> 'ACTIVE') as inactive
             from users u left join teams tm on tm.id = u.team_id
-           where u.role = ${board === "bdo" ? "BDO" : "AGENT"}
+           where u.role = ${board === "bdo" ? "BDO" : board === "tl" ? "TEAM_LEADER" : "AGENT"}
              and ${me.role === "ADMIN" ? sql`true` : me.teamId ? sql`u.team_id = ${me.teamId}` : sql`u.id = ${me.id}`}`);
   const empty = toSplit(undefined);
   const rows: BoardRow[] = people
-    .map((p) => ({ id: p.id, name: p.name, sub: p.sub, inactive: Boolean(p.inactive), ...(byKey.get(p.id) ?? empty) }))
+    .map((p) => ({ id: p.id, name: p.name, sub: p.sub, inactive: Boolean(p.inactive), ...(byKey.get(p.id) ?? empty), ...(conv.get(p.id) ?? toConversion(0, 0)) }))
     // Inactive people only stay on the board if they earned something in the period.
-    .filter((r) => !r.inactive || r.total !== 0);
-  const metric = (r: BoardRow) => (sort === "existing" ? r.existingTotal : sort === "total" ? r.total : sort === "accounts" ? r.newAccounts : r.newTotal);
+    .filter((r) => !r.inactive || r.total !== 0 || r.added > 0);
+  const metric = (r: BoardRow) =>
+    sort === "existing" ? r.existingTotal : sort === "total" ? r.total : sort === "accounts" ? r.newAccounts : sort === "conversion" ? (r.rate ?? -1) : r.newTotal;
   return rows.sort((a, b) => metric(b) - metric(a) || b.total - a.total || a.name.localeCompare(b.name));
 }

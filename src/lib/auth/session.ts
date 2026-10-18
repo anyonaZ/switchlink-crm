@@ -7,6 +7,7 @@ import { db, t } from "@/lib/db";
 import { IDLE_TIMEOUT_MS, SECURE_COOKIES, SESSION_MAX_AGE_MS } from "@/lib/config";
 import { randomToken, sha256Hex } from "@/lib/crypto";
 import type { User } from "@/lib/db/schema";
+import { mustSetTargets, weekStartOf } from "@/lib/targets";
 
 export const SESSION_COOKIE = "sl_session";
 /** Only write last_seen_at when it is at least this stale, to spare the database. */
@@ -100,11 +101,25 @@ export async function destroyUserSessions(userId: string, exceptCurrent = false)
   for (const s of all) if (s.id !== keep) await db.delete(t.sessions).where(and(eq(t.sessions.id, s.id)));
 }
 
-/** For pages and actions: the signed-in user, or a redirect to /login. */
-export async function requireUser(opts: { allowPasswordChange?: boolean } = {}): Promise<SessionUser> {
+/** Whether this BDO or Agent has set this week's targets (memoised per request). */
+const hasWeekTarget = cache(async (userId: string) => {
+  const [row] = await db
+    .select({ id: t.weeklyTargets.id })
+    .from(t.weeklyTargets)
+    .where(and(eq(t.weeklyTargets.userId, userId), eq(t.weeklyTargets.weekStart, weekStartOf())));
+  return Boolean(row);
+});
+
+/**
+ * For pages and actions: the signed-in user, or a redirect to /login.
+ * BDOs and Agents who haven't set this week's targets are sent to set them
+ * first (pages that must stay open pass `skipTargets`).
+ */
+export async function requireUser(opts: { allowPasswordChange?: boolean; skipTargets?: boolean } = {}): Promise<SessionUser> {
   const user = await getSessionUser();
   if (!user) redirect("/login?expired=1");
   if (user.mustChangePassword && !opts.allowPasswordChange) redirect("/change-password");
+  if (!opts.skipTargets && !opts.allowPasswordChange && mustSetTargets(user.role) && !(await hasWeekTarget(user.id))) redirect("/targets?required=1");
   return user;
 }
 

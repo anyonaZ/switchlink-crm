@@ -48,6 +48,7 @@ export function OverviewTab({
   statusOptions,
   reassignTo,
   sharing,
+  deletesOn,
 }: {
   acc: Account;
   ownerName: string | null;
@@ -59,6 +60,8 @@ export function OverviewTab({
   statusOptions: Status[];
   reassignTo: { id: string; name: string; role: keyof typeof ROLE_LABELS }[];
   sharing: SharingInfo | null;
+  /** Individuals not yet activated: when they'll be deleted automatically. */
+  deletesOn: Date | null;
 }) {
   const verified = acc.kind === "MERCHANT" || acc.kind === "INDIVIDUAL";
   const flow = (
@@ -72,6 +75,15 @@ export function OverviewTab({
   const step = flow.indexOf(acc.status);
   return (
     <div className="space-y-5">
+      {deletesOn && (
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <p className="font-medium">This account will be deleted on {formatDate(deletesOn)} unless it&apos;s activated.</p>
+          <p className="mt-0.5 text-xs">
+            Individual accounts not activated within 30 days of being added are removed automatically
+            {Math.ceil((deletesOn.getTime() - Date.now()) / 86400000) <= 7 ? `: ${Math.max(0, Math.ceil((deletesOn.getTime() - Date.now()) / 86400000))} day(s) left.` : "."}
+          </p>
+        </div>
+      )}
       <Section title="Status">
         <div className="card p-4">
           <ol className="flex items-start gap-1.5">

@@ -9,6 +9,8 @@ import { canAssignNewAccount, canEditAccount, canReassignAccount, canSkipLocatio
 import { audit } from "@/lib/audit";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { geocodeCapture } from "@/lib/geo/worker";
+import { deletionDate } from "@/lib/targets";
+import { formatDate } from "@/lib/format";
 
 const KINDS: AccountKind[] = ["SCHOOL", "CORPORATE", "MERCHANT", "INDIVIDUAL"];
 const MAX_LOCATION_AGE_MS = 10 * 60 * 1000;
@@ -183,7 +185,11 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
   if (captureId) setTimeout(() => void geocodeCapture(captureId), 0);
   revalidatePath("/accounts");
   revalidatePath("/dashboard");
-  return ok(pending ? "Account created. An Admin will verify it before it's active." : "Account created.", accountId);
+  const expiry =
+    kind === "INDIVIDUAL" && status !== "ACTIVE"
+      ? ` If it isn't active by ${formatDate(deletionDate(new Date()))}, it will be deleted automatically.`
+      : "";
+  return ok((pending ? "Account created. An Admin will verify it before it's active." : "Account created.") + expiry, accountId);
 }
 
 export async function updateAccount(id: string, _prev: ActionResult | null, f: FormData): Promise<ActionResult> {

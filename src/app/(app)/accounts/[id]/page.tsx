@@ -6,6 +6,7 @@ import { requireUser } from "@/lib/auth/session";
 import { loadAccountFor, loadPerson } from "@/lib/access";
 import { canEditAccount, canManageQf, canReassignAccount, canRequestShare, canVerifyAccount, canViewLocation, isSupervisor, STATUS_FLOW, userScope } from "@/lib/permissions";
 import { activeShare, sharesFor } from "@/lib/shares";
+import { deletionDateFor } from "@/lib/retention";
 import { creditOptions } from "@/lib/actions/money";
 import { PageHeader } from "@/components/ui/Page";
 import TabStrip from "@/components/TabStrip";
@@ -100,8 +101,10 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
           : null;
       sharing = { me: { id: me.id, name: me.name, isAdmin: me.role === "ADMIN" }, shares, requestTo, canRequestNow: !hasOpen };
     }
+    const deletesOn = acc.kind === "INDIVIDUAL" ? await deletionDateFor(id) : null;
     body = (
       <OverviewTab
+        deletesOn={deletesOn}
         sharing={sharing}
         acc={acc}
         ownerName={owner?.name ?? null}

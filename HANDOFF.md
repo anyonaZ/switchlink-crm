@@ -61,7 +61,7 @@ unit-tested. List queries go through `accountScope()`, `userScope()` and
 | Verification | `effectiveStatus`/`initialStatus`/`canVerifyAccount` in `permissions.ts`; `verifyAccount`/`declineVerification` in `actions/accounts.ts`; queue on the Admin dashboard |
 | Tests | `tests/permissions.test.ts`, `tests/sharing.test.ts`, `tests/signature.test.ts`, `tests/statements.test.ts` (31 pass; 2 statement tests skip without the real `.xls` files in `STATEMENT_DIR`) |
 
-## 5. What was done in the last two sessions
+## 5. What was done in each session
 
 ### Session of 13 October 2026
 
@@ -227,6 +227,51 @@ that the forced password change and rename work.
       Ongoing engagement.
     - **No GPS** is recorded for uploaded accounts, whoever uploads them.
 
+### Session of 18 October 2026
+
+14. **Conversion rates.**
+    - **Definition:** accounts added in the period that are now Active, as a
+      percentage. Individuals deleted for not being activated count as added,
+      not converted (they come from `account_deletions`).
+    - **Code:** `conversionBy()` / `myConversion()` in `src/lib/reports.ts`
+      (an `ADDED` CTE = accounts created in the period UNION deletions).
+    - **Where it shows:** a card on every dashboard (this month: own for
+      Agents, with Agents for BDOs, team for Team Leaders, all for Admins); on
+      the Leaderboard per row as `x% (converted/added)`, a summary card, and a
+      "Conversion rate" sort. A new **Team Leaders** board was added (their
+      own accounts; money keyed on `credited_to`).
+15. **Individuals deleted after 30 days if not activated.**
+    - **Code:** `src/lib/retention.ts` → `deleteExpiredIndividuals()`, run by
+      `src/instrumentation-node.ts` 90 s after start and then hourly. Only
+      individuals that never became Active; anything with a disbursement or
+      statement line is kept. Each deletion is written to `account_deletions`
+      (migration `0006`) and to the audit log (`account.expired`).
+    - **Notices:** the new-account form (non-admins adding an individual), the
+      success message (with the date), a banner on the account page, the
+      Bulk upload page, and an "Individuals to be deleted soon" list (next 7
+      days) on dashboards (`expiringSoon()`).
+16. **Weekly targets** (`/targets`, table `weekly_targets`, one row per user
+    per Monday, migration `0006`).
+    - **Rules:** `src/lib/targets.ts` (pure, tested in `tests/targets.test.ts`):
+      week start in Nairobi, edits allowed only on the Nairobi day the target
+      was set, roll-ups, percentages.
+    - **Data:** `src/lib/targets-data.ts` → `myTarget()`, `weekOverview()`
+      (team → BDO → agents). Closed = first ACTIVE status in the week, counted
+      for the account's current owner; corporates means CORPORATE only (not
+      schools). Disbursed = amounts with `credited_to` = the person.
+    - **The gate:** BDOs and Agents without this week's target are redirected
+      to `/targets?required=1` by `requireUser()` in
+      `src/lib/auth/session.ts` (cached per request). Pages that must stay
+      reachable pass `requireUser({ skipTargets: true })`: the app layout,
+      `/targets`, the target action, Profile and the name change. The gate
+      applies all week until the target is set, not only on Mondays. Team
+      Leaders and Admins aren't gated.
+    - **Lesson:** a redirect in the shared `(app)/layout.tsx` looped on client
+      navigation, so the gate lives in `requireUser()`, not the layout.
+    - **Views:** dashboards (own, "With your agents" for BDOs, team totals for
+      Team Leaders, all teams for Admins); the Targets page with BDO
+      breakdowns, **Not set** badges and previous weeks.
+
 ## 6. How to run
 
 **Laptop:** Node 22, Postgres 16, `pip install xlrd`.
@@ -269,9 +314,9 @@ These are not done yet, roughly in priority order.
    request is waiting, or an agent that a follow-up is due, unless they open
    the app. Options: email via SMTP, SMS/WhatsApp (e.g. Africa's Talking —
    paid), or web push (free).
-7. **Bulk import of existing clients** from spreadsheets (CSV import), so day 1
-   doesn't mean re-typing everything. Remember that new accounts need GPS at
-   registration, so imported ones need a rule.
+7. **Bulk import of existing schools and corporates.** Merchants and
+   individuals have Bulk upload, and corporates have `import:corporates`;
+   schools still have no import.
 8. **Kenya Data Protection Act 2019.** The CRM stores names, phone numbers and GPS
    locations. Check whether Switchlink must register with the ODPC, and add a
    privacy notice, consent wording and a retention/deletion policy. (This is
@@ -302,6 +347,9 @@ These are not done yet, roughly in priority order.
   Use `DELETE` instead.
 - Africa/Nairobi time everywhere (`src/lib/format.ts`, `timezone.ts`).
 - Money is `numeric(14,2)`, summed in SQL, never in the browser.
+- Unit tests: 37, all passing (`npm test`).
+- BDO and Agent test users need a `weekly_targets` row for the current week,
+  or every page redirects them to `/targets`.
 - The README is the professional, client-facing document. It deliberately
   doesn't mention the authorship signature; that is documented only here.
 

@@ -145,6 +145,12 @@ export default function NewAccountForm({
             className="space-y-4"
           >
             <input type="hidden" name="kind" value={kind} />
+            {isPerson && !isAdmin && (
+              <p role="note" className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <strong>Heads up:</strong> individual accounts that aren&apos;t activated within 30 days of being added are deleted automatically. Follow up so an Admin can verify
+                this client in time.
+              </p>
+            )}
             <div className="card space-y-4 p-4">
               <Field label={isPerson ? "Full name" : kind === "MERCHANT" ? "Business name" : "Organisation name"} name="name">
                 <input id="name" name="name" required defaultValue={d("name")} className="input" autoComplete="off" />

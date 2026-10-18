@@ -57,7 +57,8 @@ export default async function ImportPage() {
           Rows already in the CRM (same name, Pesi number, or an individual&apos;s phone) are skipped, so uploading the same file twice is safe. No GPS location is recorded for uploaded accounts.
           {me.role === "ADMIN"
             ? "Individuals you upload are Active straight away (you are verifying them); merchants start in Ongoing engagement."
-            : "Individuals you upload wait for an Admin to verify them (Pending verification); merchants start in Ongoing engagement."}
+            : "Individuals you upload wait for an Admin to verify them (Pending verification); merchants start in Ongoing engagement."}{" "}
+          Individual accounts that aren&apos;t activated within 30 days are deleted automatically.
         </p>
       </details>
     </div>

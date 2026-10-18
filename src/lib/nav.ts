@@ -10,6 +10,7 @@ import {
   Handshake,
   Upload,
   Trophy,
+  Target,
   UserCog,
   type LucideIcon,
 } from "lucide-react";
@@ -22,6 +23,7 @@ export const NAV: Item[] = [
   { href: "/accounts", label: "Accounts", icon: Building2 },
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { href: "/follow-ups", label: "Follow-ups", icon: CalendarCheck },
+  { href: "/targets", label: "Weekly targets", icon: Target },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { href: "/import", label: "Bulk upload", icon: Upload, roles: ["BDO", "TEAM_LEADER", "ADMIN"] },
   { href: "/statements", label: "Statements", icon: FileSpreadsheet, roles: ["ADMIN"] },

@@ -92,7 +92,7 @@ export async function changePassword(_prev: ActionResult | null, form: FormData)
 
 /** Anyone can change the name shown for them (their email and role are managed by an Admin). */
 export async function updateMyName(_prev: ActionResult | null, form: FormData): Promise<ActionResult> {
-  const me = await requireUser();
+  const me = await requireUser({ skipTargets: true });
   const name = String(form.get("name") ?? "").trim().replace(/\s+/g, " ");
   if (name.length < 2) return fail("Enter your full name.", { name: "Required" });
   if (name.length > 120) return fail("That name is too long.", { name: "Too long" });

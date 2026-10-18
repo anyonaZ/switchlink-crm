@@ -20,3 +20,13 @@ if (process.env.NEXT_PHASE !== "phase-production-build") {
       .catch(() => undefined);
   }
 }
+
+// Delete individual accounts not activated within 30 days (see src/lib/retention.ts). Hourly.
+if (process.env.NEXT_PHASE !== "phase-production-build") {
+  const sweep = () =>
+    import("@/lib/retention")
+      .then(({ deleteExpiredIndividuals }) => deleteExpiredIndividuals())
+      .catch((e) => console.error("[retention] sweep failed", e));
+  setTimeout(sweep, 90_000);
+  setInterval(sweep, 60 * 60_000).unref?.();
+}

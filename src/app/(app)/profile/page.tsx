@@ -8,7 +8,7 @@ import NameForm from "./NameForm";
 export const metadata = { title: "Profile" };
 
 export default async function ProfilePage() {
-  const me = await requireUser();
+  const me = await requireUser({ skipTargets: true });
   return (
     <div className="mx-auto max-w-md space-y-4">
       <PageHeader title="Profile" subtitle={`${ROLE_LABELS[me.role]} · ${me.email}`} />

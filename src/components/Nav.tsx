@@ -96,7 +96,7 @@ export function BottomNav() {
           </Link>
         </div>
         {slot("/follow-ups", "Follow-ups", CalendarCheck)}
-        {slot("/more", "More", Menu, ["/more", "/pipeline", "/leaderboard", "/import", "/shares", "/statements", "/locations", "/reports", "/users", "/teams", "/profile", "/change-password"])}
+        {slot("/more", "More", Menu, ["/more", "/pipeline", "/targets", "/leaderboard", "/import", "/shares", "/statements", "/locations", "/reports", "/users", "/teams", "/profile", "/change-password"])}
       </div>
     </nav>
   );

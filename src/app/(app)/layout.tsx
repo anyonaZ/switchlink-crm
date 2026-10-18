@@ -5,7 +5,9 @@ import { signatureStatus } from "@/lib/signature-check";
 import { AUTHOR } from "@/lib/signature";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const me = await requireUser();
+  // The weekly-targets check runs in each page's requireUser(), not here: a
+  // redirect from a shared layout loops on client-side navigation.
+  const me = await requireUser({ skipTargets: true });
   const sig = signatureStatus();
   return (
     <div className="flex min-h-dvh">

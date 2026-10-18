@@ -554,3 +554,55 @@ export type LocationCapture = typeof locationCaptures.$inferSelect;
 export type Disbursement = typeof disbursements.$inferSelect;
 export type StatementUpload = typeof statementUploads.$inferSelect;
 export type AccountShare = typeof accountShares.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Weekly targets
+// ---------------------------------------------------------------------------
+/**
+ * What a BDO or Agent commits to close in a week (Monday to Sunday, Nairobi
+ * time). Required before they can use the CRM that week. An Agent's targets
+ * add up into their BDO's, and every BDO's and Agent's into their team's.
+ */
+export const weeklyTargets = pgTable(
+  "weekly_targets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** The Monday the week starts on (Nairobi calendar date). */
+    weekStart: date("week_start").notNull(),
+    individuals: integer("individuals").notNull().default(0),
+    merchants: integer("merchants").notNull().default(0),
+    corporates: integer("corporates").notNull().default(0),
+    disbursement: money("disbursement").notNull().default("0"),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("weekly_targets_user_week_idx").on(t.userId, t.weekStart), index("weekly_targets_week_idx").on(t.weekStart)]
+);
+
+/**
+ * Individual accounts removed automatically for not being activated in time.
+ * Kept so conversion rates still count them (as not converted) and so there
+ * is a record of what was removed.
+ */
+export const accountDeletions = pgTable(
+  "account_deletions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id").notNull(),
+    kind: accountKind("kind").notNull(),
+    name: text("name").notNull(),
+    phone: text("phone"),
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
+    teamId: uuid("team_id").references(() => teams.id, { onDelete: "set null" }),
+    /** When the account was originally registered. */
+    accountCreatedAt: timestamp("account_created_at", { withTimezone: true }).notNull(),
+    reason: text("reason").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("account_deletions_created_idx").on(t.accountCreatedAt), index("account_deletions_owner_idx").on(t.ownerId)]
+);
+
+export type WeeklyTarget = typeof weeklyTargets.$inferSelect;

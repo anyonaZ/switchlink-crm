@@ -11,7 +11,9 @@ const SORTS: { value: BoardSort; label: string }[] = [
   { value: "existing", label: "Existing accounts" },
   { value: "total", label: "Total" },
   { value: "accounts", label: "Accounts closed" },
+  { value: "conversion", label: "Conversion rate" },
 ];
+const rateText = (r: { rate: number | null }) => (r.rate === null ? "—" : `${r.rate}%`);
 const MEDALS = ["🥇", "🥈", "🥉"];
 
 export default async function LeaderboardPage({ searchParams }: { searchParams: Promise<{ period?: string; board?: string; sort?: string }> }) {
@@ -24,6 +26,9 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
   const { start, end } = periodRange(period);
   const rows = await leaderboard(me, start, end, board, sort);
   const sum = (k: keyof BoardRow) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const added = sum("added");
+  const converted = sum("converted");
+  const overallRate = added > 0 ? Math.round((converted / added) * 1000) / 10 : null;
   const href = (patch: Record<string, string>) => {
     const p = new URLSearchParams({ period, board, sort, ...patch });
     return `/leaderboard?${p}`;
@@ -48,6 +53,15 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
         <Stat label="Accounts closed" value={sum("newAccounts")} />
         <Stat label="Existing accounts" value={formatMoney(sum("existingTotal"), { dash: false })} />
         <Stat label="Total disbursed" value={formatMoney(sum("total"), { dash: false })} />
+      </div>
+      <div className="card flex items-center justify-between gap-3 p-4 text-sm">
+        <span>
+          <span className="block font-medium text-ink">Conversion rate</span>
+          <span className="text-xs text-slate-500">
+            {converted} of {added} account{added === 1 ? "" : "s"} added in this period became Active
+          </span>
+        </span>
+        <span className="text-2xl font-semibold tabular-nums text-brand-700">{rateText({ rate: overallRate })}</span>
       </div>
       <div className="card grid grid-cols-2 divide-x divide-slate-100 text-sm">
         <div className="p-3">
@@ -109,10 +123,17 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
                     </span>
                     {r.sub && <span className="block truncate text-xs text-slate-500">{board === "team" ? `Leader: ${r.sub}` : r.sub}</span>}
                   </span>
-                  <span className="text-right">
-                    <span className="block text-sm font-semibold tabular-nums text-green-700">{formatMoney(r.newTotal, { dash: false })}</span>
-                    <span className="block text-[11px] text-slate-500">new business</span>
-                  </span>
+                  {sort === "conversion" ? (
+                    <span className="text-right">
+                      <span className="block text-sm font-semibold tabular-nums text-brand-700">{rateText(r)}</span>
+                      <span className="block text-[11px] text-slate-500">conversion</span>
+                    </span>
+                  ) : (
+                    <span className="text-right">
+                      <span className="block text-sm font-semibold tabular-nums text-green-700">{formatMoney(r.newTotal, { dash: false })}</span>
+                      <span className="block text-[11px] text-slate-500">new business</span>
+                    </span>
+                  )}
                 </div>
                 <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 pl-10 text-xs text-slate-600 sm:grid-cols-4">
                   <div>
@@ -132,7 +153,11 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
                     <dd className="inline tabular-nums">{formatMoney(r.existingMerchant, { dash: false })}</dd>
                   </div>
                   <div className="col-span-2 sm:col-span-4">
-                    {r.newAccounts} account{r.newAccounts === 1 ? "" : "s"} closed · total {formatMoney(r.total, { dash: false })}
+                    {r.newAccounts} account{r.newAccounts === 1 ? "" : "s"} closed · total {formatMoney(r.total, { dash: false })} ·{" "}
+                    <span className="font-medium text-brand-700">
+                      conversion {rateText(r)}
+                      {r.added > 0 ? ` (${r.converted}/${r.added})` : ""}
+                    </span>
                   </div>
                 </dl>
               </li>
@@ -142,7 +167,8 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
       )}
       <p className="text-xs text-slate-500">
         <strong>New business</strong> is money disbursed to accounts that got their first disbursement in this period (newly closed accounts).{" "}
-        <strong>Existing accounts</strong> are those first disbursed before it. BDO figures include their agents.
+        <strong>Existing accounts</strong> are those first disbursed before it. <strong>Conversion</strong> is the share of accounts added in this period that have become Active
+        (individuals deleted for not being activated count as not converted). BDO figures include their agents; Team Leader figures are their own accounts.
       </p>
     </div>
   );

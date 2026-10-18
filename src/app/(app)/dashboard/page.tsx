@@ -10,7 +10,47 @@ import { ACTIVITY_LABELS, ROLE_LABELS } from "@/lib/labels";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { getCalendarPeriodRange } from "@/lib/timezone";
 import { APP_TIMEZONE } from "@/lib/config";
-import { bdoRollup, productTotals, periodRange } from "@/lib/reports";
+import { bdoRollup, myConversion, productTotals, periodRange, type Conversion } from "@/lib/reports";
+import TargetProgress from "@/components/TargetProgress";
+import { addTargets, weekStartOf, ZERO } from "@/lib/targets";
+import { weekOverview } from "@/lib/targets-data";
+import { expiringSoon } from "@/lib/retention";
+import { formatDate } from "@/lib/format";
+
+function ConversionCard({ c }: { c: Conversion & { label: string } }) {
+  return (
+    <Link href="/leaderboard?sort=conversion" className="card flex items-center justify-between gap-3 p-4 text-sm active:opacity-70">
+      <span>
+        <span className="block font-medium text-ink">{c.label} this month</span>
+        <span className="text-xs text-slate-500">
+          {c.converted} of {c.added} account{c.added === 1 ? "" : "s"} added became Active
+        </span>
+      </span>
+      <span className="text-2xl font-semibold tabular-nums text-brand-700">{c.rate === null ? "—" : `${c.rate}%`}</span>
+    </Link>
+  );
+}
+
+function ExpiringList({ rows }: { rows: Awaited<ReturnType<typeof expiringSoon>> }) {
+  if (!rows.length) return null;
+  return (
+    <Section title={`Individuals to be deleted soon (${rows.length})`} subtitle="Not activated within 30 days of being added. Activate them or they'll be removed.">
+      <ul className="card divide-y divide-slate-100 border-red-200">
+        {rows.slice(0, 6).map((r) => (
+          <li key={r.id}>
+            <Link href={`/accounts/${r.id}`} className="flex items-center justify-between gap-3 px-4 py-3 text-sm active:bg-slate-50">
+              <span className="min-w-0">
+                <span className="block truncate font-medium text-ink">{r.name}</span>
+                <span className="block truncate text-xs text-slate-500">{r.owner ?? "Unassigned"}</span>
+              </span>
+              <span className="shrink-0 text-xs font-medium text-red-700">deleted {formatDate(r.deletesOn)}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
 import { rankLeads } from "@/lib/lead-scoring";
 import { waitingOnMe } from "@/lib/shares";
 import { alias } from "drizzle-orm/pg-core";
@@ -140,6 +180,10 @@ export default async function Dashboard() {
   if (me.role === "AGENT" || me.role === "BDO") {
     const rollup = me.role === "BDO" ? await bdoRollup(me, month.start, month.end) : null;
     const myGroup = rollup?.groups.find((g) => g.bdo.id === me.id) ?? null;
+    const [week, conversion, expiring] = await Promise.all([weekOverview(me, weekStartOf()), myConversion(me, month.start, month.end), expiringSoon(me)]);
+    const everyone = week.flatMap((tm) => [...tm.bdos.flatMap((b) => [b.bdo, ...b.agents]), ...tm.others]);
+    const mine = everyone.find((p) => p.id === me.id);
+    const withAgents = week.flatMap((tm) => tm.bdos).find((b) => b.bdo.id === me.id);
     const [counts, opps, [{ pendingN }]] = await Promise.all([
       db.select({ n: sql<number>`count(*)::int` }).from(t.accounts).where(accountScope(me)),
       db
@@ -213,6 +257,22 @@ export default async function Dashboard() {
             </span>
           </div>
         )}
+        {mine && (
+          <Section title="This week's targets" action={<Link href="/targets" className="text-sm font-medium text-brand-700">Details</Link>}>
+            <div className="card p-4">
+              <TargetProgress target={mine.target} actual={mine.actual} />
+            </div>
+            {withAgents && withAgents.agents.length > 0 && (
+              <div className="card p-4">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">With your agents</p>
+                <TargetProgress target={withAgents.target} actual={withAgents.actual} compact />
+                {withAgents.missing > 0 && <p className="mt-2 text-xs text-red-600">{withAgents.missing} of your agents haven&apos;t set targets.</p>}
+              </div>
+            )}
+          </Section>
+        )}
+        <ConversionCard c={conversion} />
+        <ExpiringList rows={expiring} />
         <Section title="Follow-ups due" action={<Link href="/follow-ups" className="text-sm font-medium text-brand-700">All</Link>}>
           <FollowUpList rows={due} showAgent={me.role === "BDO"} />
         </Section>
@@ -248,6 +308,10 @@ export default async function Dashboard() {
   }
 
   // Team Leader / Admin
+  const [week, conversion, expiring] = await Promise.all([weekOverview(me, weekStartOf()), myConversion(me, month.start, month.end), expiringSoon(me)]);
+  const weekTarget = week.reduce((s, tm) => addTargets(s, tm.target), ZERO);
+  const weekActual = week.reduce((s, tm) => addTargets(s, tm.actual), ZERO);
+  const weekMissing = week.reduce((s, tm) => s + tm.missing, 0);
   const [{ groups }, staleStatements, shareRequests, toVerify] = await Promise.all([
     bdoRollup(me, month.start, month.end),
     db.execute<{ id: string; name: string; last: string | null }>(sql`
@@ -270,6 +334,18 @@ export default async function Dashboard() {
         <p className="text-sm text-slate-500">{me.role === "ADMIN" ? "Every team" : "Your team"}, this month.</p>
       </div>
       <VerificationQueue rows={toVerify} />
+      <Section
+        title={me.role === "ADMIN" ? "This week's targets (all teams)" : "Team targets this week"}
+        subtitle="Every BDO's and Agent's targets added up."
+        action={<Link href="/targets" className="text-sm font-medium text-brand-700">By BDO</Link>}
+      >
+        <div className="card p-4">
+          <TargetProgress target={weekTarget} actual={weekActual} />
+          {weekMissing > 0 && <p className="mt-2 text-xs text-red-600">{weekMissing} {weekMissing === 1 ? "person hasn't" : "people haven't"} set targets this week.</p>}
+        </div>
+      </Section>
+      <ConversionCard c={conversion} />
+      <ExpiringList rows={expiring} />
       {shareRequests > 0 && (
         <Link href="/shares" className="card flex items-center justify-between gap-3 border-amber-200 bg-amber-50 p-4 text-sm active:opacity-70">
           <span className="font-medium text-amber-900">
