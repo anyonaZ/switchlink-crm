@@ -8,7 +8,7 @@ import { hashPassword, passwordProblem } from "@/lib/auth/password";
 import { loadPerson } from "@/lib/access";
 import { canManageUser, canResetPassword, creatableRoles, type Role } from "@/lib/permissions";
 import { audit } from "@/lib/audit";
-import { fail, ok, type ActionResult } from "@/lib/action-result";
+import { fail, ok, okSecret, type ActionResult } from "@/lib/action-result";
 import { randomToken } from "@/lib/crypto";
 
 const ROLES: Role[] = ["AGENT", "BDO", "TEAM_LEADER", "ADMIN"];
@@ -18,6 +18,28 @@ const str = (f: FormData, k: string) => {
 };
 /** Temporary password shown once to whoever created or reset the account, e.g. "Sl-k3Rt9xQa-4821". */
 const tempPassword = () => `Sl-${randomToken(6)}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+/** The dialog shown after creating a user or resetting a password. */
+function signInDetails(title: string, name: string, email: string, password: string, id?: string) {
+  const url = process.env.APP_URL && !/localhost/.test(process.env.APP_URL) ? process.env.APP_URL : null;
+  return okSecret({
+    title,
+    label: "Temporary password",
+    value: password,
+    details: [
+      { label: "Name", value: name },
+      { label: "Sign-in email", value: email },
+    ],
+    note: `Give this to ${name} now. It won't be shown again. They'll set their own password when they sign in.`,
+    shareText: [
+      `Hi ${name}, here are your Switchlink CRM sign-in details:`,
+      ...(url ? [url] : []),
+      `Email: ${email}`,
+      `Temporary password: ${password}`,
+      "You'll be asked to set your own password when you sign in.",
+    ].join("\n"),
+  }, id);
+}
 
 function touch() {
   revalidatePath("/users");
@@ -87,7 +109,7 @@ export async function createUser(_prev: ActionResult | null, f: FormData): Promi
     .returning({ id: t.users.id });
   await audit(me.id, "user.create", "user", u.id, { role, teamId: line.teamId, reportsTo: line.reportsTo });
   touch();
-  return ok(`${name} added. Temporary password: ${password} (they'll set their own at first sign-in).`, u.id);
+  return signInDetails(`${name} added`, name!, email!, password, u.id);
 }
 
 export async function resetPassword(userId: string): Promise<ActionResult> {
@@ -101,7 +123,8 @@ export async function resetPassword(userId: string): Promise<ActionResult> {
     .where(eq(t.users.id, userId));
   await destroyUserSessions(userId);
   await audit(me.id, "user.reset_password", "user", userId);
-  return ok(`New temporary password for ${target.name}: ${password}`);
+  const [{ email }] = await db.select({ email: t.users.email }).from(t.users).where(eq(t.users.id, userId));
+  return signInDetails(`New password for ${target.name}`, target.name, email, password);
 }
 
 /** Team Leaders and Admins move an Agent to another BDO. Past figures stay with the BDO at the time. */

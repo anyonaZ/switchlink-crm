@@ -4,6 +4,7 @@ import { createContext, startTransition, useContext, useEffect, useRef, useState
 import { useRouter } from "next/navigation";
 import type { ActionResult } from "@/lib/action-result";
 import { useToast } from "@/components/ui/Toast";
+import { useShowSecret } from "@/components/ui/SecretDialog";
 import { useCloseSheet } from "@/components/ui/Sheet";
 
 const FieldErrors = createContext<Record<string, string>>({});
@@ -39,6 +40,7 @@ export default function ActionForm({
   const [pending, setPending] = useState(false);
   const busy = useRef(false);
   const toast = useToast();
+  const showSecret = useShowSecret();
   const close = useCloseSheet();
   const router = useRouter();
   const ref = useRef<HTMLFormElement>(null);
@@ -72,7 +74,8 @@ export default function ActionForm({
     if (!res) return; // the action navigated away
     setState(res);
     if (res.ok) {
-      if (res.message) toast("success", res.message);
+      if (res.secret) showSecret(res.secret);
+      else if (res.message) toast("success", res.message);
       if (resetOnSuccess) ref.current?.reset();
       if (closeOnSuccess) close();
       if (redirectTo) router.push(redirectTo.replace("{id}", res.id ?? ""));

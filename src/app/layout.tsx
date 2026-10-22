@@ -4,6 +4,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ToastProvider } from "@/components/ui/Toast";
+import { SecretProvider } from "@/components/ui/SecretDialog";
 import RegisterServiceWorker from "@/components/RegisterServiceWorker";
 import SignatureBeacon from "@/components/SignatureBeacon";
 import { AUTHOR, COPYRIGHT, SIGNATURE_ID } from "@/lib/signature";
@@ -33,7 +34,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <ToastProvider>{children}</ToastProvider>
+        <ToastProvider>
+          <SecretProvider>{children}</SecretProvider>
+        </ToastProvider>
         <RegisterServiceWorker />
         <SignatureBeacon />
       </body>

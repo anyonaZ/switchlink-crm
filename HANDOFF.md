@@ -272,6 +272,19 @@ that the forced password change and rename work.
       Team Leaders, all teams for Admins); the Targets page with BDO
       breakdowns, **Not set** badges and previous weeks.
 
+### Session of 22 October 2026
+
+17. **Temporary passwords no longer vanish.** Resetting a password or adding
+    a user used to show the password in a toast that closed after 3 seconds.
+    It now opens a dialog (`src/components/ui/SecretDialog.tsx`, provider in
+    `src/app/layout.tsx`) that stays until **I've saved it** is tapped
+    (tapping outside does nothing). It has a **Copy** button (with a fallback
+    for plain-http sites), the person's name and sign-in email, and **Share /
+    Copy sign-in details** (a ready-to-send message; the link is included
+    when `APP_URL` isn't localhost). Actions return it with
+    `okSecret()` in `src/lib/action-result.ts`; `ActionForm` and
+    `ActionButton` show it automatically.
+
 ## 6. How to run
 
 **Laptop:** Node 22, Postgres 16, `pip install xlrd`.

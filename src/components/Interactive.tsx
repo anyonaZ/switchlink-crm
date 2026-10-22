@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { ActionResult } from "@/lib/action-result";
 import { useToast } from "@/components/ui/Toast";
+import { useShowSecret } from "@/components/ui/SecretDialog";
 import { changeStage } from "@/lib/actions/crm";
 import { STAGES, STAGE_LABELS, type Stage } from "@/lib/labels";
 
@@ -58,6 +59,7 @@ export function ActionButton({
 }) {
   const [pending, start] = useTransition();
   const toast = useToast();
+  const showSecret = useShowSecret();
   const router = useRouter();
   return (
     <button
@@ -74,7 +76,8 @@ export function ActionButton({
         start(async () => {
           const res = await run(input);
           if (res.ok) {
-            toast("success", res.message ?? "Done.");
+            if (res.secret) showSecret(res.secret);
+            else toast("success", res.message ?? "Done.");
             router.refresh();
           } else toast("error", res.error);
         });
