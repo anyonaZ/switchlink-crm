@@ -876,7 +876,7 @@ export function MoneyTab({
             {uploads.map((u) => (
               <li key={u.id} className="px-4 py-2.5">
                 <p className={u.accepted ? "text-ink" : "text-red-700"}>
-                  {u.accepted ? `${u.linesNew} new lines, ${u.drawsNew} draws (${formatMoney(u.drawsAmountNew, { dash: false })})` : `Rejected: ${u.message}`}
+                  {u.accepted ? `${u.linesNew} new lines, ${u.drawsNew} draw${u.drawsNew === 1 ? "" : "s"} (${formatMoney(u.drawsAmountNew, { dash: false })})${u.reversalsNew > 0 ? `, ${u.reversalsNew} reversal${u.reversalsNew === 1 ? "" : "s"} (−${formatMoney(u.reversedAmountNew, { dash: false })})` : ""}` : `Rejected: ${u.message}`}
                 </p>
                 <p className="text-xs text-slate-500">
                   {formatDateTime(u.createdAt)} · {u.fileName}

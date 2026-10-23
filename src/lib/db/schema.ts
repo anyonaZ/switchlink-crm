@@ -386,6 +386,9 @@ export const statementUploads = pgTable(
     linesNew: integer("lines_new").notNull().default(0),
     drawsNew: integer("draws_new").notNull().default(0),
     drawsAmountNew: money("draws_amount_new").notNull().default("0"),
+    /** Reversals of earlier draws found in this upload (counted apart from draws). */
+    reversalsNew: integer("reversals_new").notNull().default(0),
+    reversedAmountNew: money("reversed_amount_new").notNull().default("0"),
     accepted: boolean("accepted").notNull(),
     message: text("message"),
     warnings: jsonb("warnings").$type<string[]>().notNull().default([]),
@@ -510,7 +513,8 @@ export const disbursements = pgTable(
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     source: disbursementSource("source").notNull().default("MANUAL"),
     statementLineId: uuid("statement_line_id").references(() => statementLines.id, { onDelete: "set null" }),
-    reversesId: uuid("reverses_id"),
+    /** The entry this one reverses. At most one reversal per entry (unique index). */
+    reversesId: uuid("reverses_id").references((): AnyPgColumn => disbursements.id),
     notes: text("notes"),
     /** Set when this row is one BDO's slice of a shared-corporate disbursement. */
     shareId: uuid("share_id").references(() => accountShares.id, { onDelete: "set null" }),
@@ -525,6 +529,7 @@ export const disbursements = pgTable(
     index("disbursements_team_idx").on(t.creditedTeamId, t.disbursedAt),
     index("disbursements_bdo_idx").on(t.creditedBdoId, t.disbursedAt),
     uniqueIndex("disbursements_statement_line_idx").on(t.statementLineId),
+    uniqueIndex("disbursements_reverses_idx").on(t.reversesId),
   ]
 );
 

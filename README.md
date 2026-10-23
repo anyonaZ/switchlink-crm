@@ -70,6 +70,11 @@ The reporting structure is **Admin → Team Leader → BDO → Agent**.
 
 Every user can change their own name and password from **Profile**.
 
+**Team changes:** when someone moves to another team (or an Agent to a BDO on
+another team), their accounts move with them, and a BDO's Agents and their
+accounts follow the BDO. Money already credited stays with the team it was
+earned in.
+
 All access rules are defined in `src/lib/permissions.ts` and covered by unit
 tests.
 
@@ -106,7 +111,9 @@ Any account can be marked Inactive.
 **Counting draws**
 - Each payment that takes the balance below zero is recorded as a QF draw for the amount below zero.
 - Charges and fees are never counted as draws.
-- A reversed payment cancels its draw.
+- A reversed payment cancels its draw, including when the reversal appears in a later statement than the payment. It is linked to that draw and never counted as a draw.
+- Upload results list new draws and reversals separately. Only new lending that isn't reversed marks the Quick Finance opportunity Active.
+- An upload is saved completely (lines, draws and its audit entry) or not at all.
 
 **Cycles**
 - QF cycles are each draw divided by the QF limit in force on the day of the draw.
@@ -115,6 +122,8 @@ Any account can be marked Inactive.
 
 - **No edits:** ledger entries are never edited. A correction is recorded as a reversal entry.
 - **Credit is fixed on the day:** each entry records the credited person, their BDO and their team at the time. Later reassignments don't change historical figures.
+- **One reversal per entry:** enforced by the database, so a double tap or two Admins reversing at once can't reverse an entry twice.
+- **Reversed entries don't count:** a reversed draw is excluded from draw counts and isn't an account's first disbursement.
 
 ### Shared corporates
 
@@ -219,6 +228,7 @@ The file's column headings are recognised in common wordings.
 - **Passwords:** hashed with Argon2id. Users must change their password at first sign-in.
 - **Lockout:** an account is locked for 15 minutes after 5 failed sign-in attempts.
 - **Sessions:** stored server-side. Users are signed out after 60 minutes of inactivity, or after 7 days at most.
+- **Unsaved forms:** a half-filled new-account form is kept only in the current browser tab, for the signed-in user, for up to 4 hours, and is wiped at sign-out. KRA PIN, registration number and date of birth are never kept.
 - **Audit log:** sensitive actions (sign-ins, money, status changes, verifications and approvals) are recorded in `audit_log`.
 
 ---
@@ -345,6 +355,7 @@ npm run dev                       # http://localhost:3000
 | `npm run dev` | Development server |
 | `npm run build` / `npm start` | Production build and server |
 | `npm test` | Unit tests |
+| `npm run test:db` | Database tests (ledger, statements, team moves, migrations) on a temporary database; needs PostgreSQL and `pip install xlrd xlwt` |
 | `npm run typecheck` | TypeScript checks |
 | `npm run db:migrate` | Apply pending migrations |
 | `npm run db:generate -- --name <change>` | Generate a migration after editing the schema |

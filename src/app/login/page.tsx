@@ -3,6 +3,7 @@ import ActionForm, { Field, Submit } from "@/components/ui/ActionForm";
 import { login } from "@/lib/actions/auth";
 import { getSessionUser } from "@/lib/auth/session";
 import Signature from "@/components/Signature";
+import ClearDrafts from "@/components/ClearDrafts";
 
 export const metadata = { title: "Sign in" };
 
@@ -11,6 +12,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const { expired } = await searchParams;
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center bg-brand-950 px-4 py-10">
+      <ClearDrafts />
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <div className="mx-auto mb-5 w-[210px] rounded-xl bg-white p-3 shadow-lg">

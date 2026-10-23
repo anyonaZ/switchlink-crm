@@ -285,6 +285,54 @@ that the forced password change and rename work.
     `okSecret()` in `src/lib/action-result.ts`; `ActionForm` and
     `ActionButton` show it automatically.
 
+### Session of 23 October 2026: integrity fixes
+
+18. **Moving people keeps team scope consistent.** `src/lib/people-data.ts` →
+    `followTeam()`: an account's team follows its owner, and a BDO's Agents
+    (and their accounts) follow the BDO. Used by `moveAgent` (Team Leaders)
+    and `updateUser` (Admins; the old "move their accounts too" checkbox is
+    gone, it's always done). Disbursements keep `credited_team_id`.
+19. **New-account drafts.** `src/lib/drafts.ts`: sessionStorage (not
+    localStorage), key `sl-draft:new-account:<userId>`, 4-hour expiry, KRA PIN,
+    registration no and date of birth never stored. `ClearDrafts` on the
+    sign-in page wipes every draft (and the old shared `sl-new-account-draft`
+    key) after sign-out or session expiry.
+20. **One reversal per ledger entry.** Unique index
+    `disbursements_reverses_idx` plus a self-referencing FK on `reverses_id`.
+    `src/lib/ledger.ts` → `reverseEntry()` locks the originals
+    (`SELECT … FOR UPDATE`), skips slices already reversed, and maps a unique
+    violation to "already reversed".
+21. **Statement uploads are all-or-nothing.** The `statement.upload` audit
+    entry is written inside the ingest transaction. In the action, only an
+    error from `ingestStatement` reports "nothing was saved" or deletes the file.
+22. **Statement reversals.**
+    - **Linking:** `priorDraws()` returns the standing (unreversed) draw for
+      each serial, so a reversal in a later upload gets `reverses_id`.
+    - **Counts:** `drawsNew` counts positive draws only; uploads have
+      `reversals_new` / `reversed_amount_new`.
+    - **QF opportunity:** marked Active only when the upload has net new
+      lending.
+    - **Reports:** the QF draw count excludes reversed draws.
+    - **Safety:** an upload that would record a reversal with nothing to link
+      to is rejected.
+23. **Migration `0007_ledger_integrity`** repairs existing data before adding
+    the constraints:
+    - Agents are put on their BDO's team.
+    - Accounts are put on their owner's team (audit `account.team_repaired`).
+    - Unlinked statement reversals are linked.
+    - Duplicate reversals are removed (audit
+      `disbursement.duplicate_reversal_removed`).
+    - Upload counts are recomputed.
+
+    Gotcha: on a fresh database every migration runs in one transaction, so
+    compare enum values added by an earlier migration as text
+    (`role::text = 'AGENT'`).
+24. **Tests:** `npm run test:db` (`tests/db/integrity.db.test.ts`, 13 tests) runs
+    on a throwaway `<db>_itest` database, with statements generated in Pesi's
+    `.xls` layout by `tests/fixtures/make_statement.py` and read by the real
+    parser. The two real client statements are still not in the repo; the
+    `STATEMENT_DIR` tests in `tests/statements.test.ts` use them when present.
+
 ## 6. How to run
 
 **Laptop:** Node 22, Postgres 16, `pip install xlrd`.
@@ -360,7 +408,7 @@ These are not done yet, roughly in priority order.
   Use `DELETE` instead.
 - Africa/Nairobi time everywhere (`src/lib/format.ts`, `timezone.ts`).
 - Money is `numeric(14,2)`, summed in SQL, never in the browser.
-- Unit tests: 37, all passing (`npm test`).
+- Unit tests: 37 (`npm test`); database tests: 13 (`npm run test:db`). All passing.
 - BDO and Agent test users need a `weekly_targets` row for the current week,
   or every page redirects them to `/targets`.
 - The README is the professional, client-facing document. It deliberately

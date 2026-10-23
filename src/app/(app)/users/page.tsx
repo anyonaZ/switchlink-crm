@@ -203,9 +203,9 @@ export default async function UsersPage() {
                             ))}
                           </select>
                         </Field>
-                        <label className="flex min-h-[44px] items-center gap-3 text-sm">
-                          <input type="checkbox" name="move_accounts" className="h-5 w-5 rounded border-slate-300" /> Move their accounts to the new team too
-                        </label>
+                        <p className="text-sm text-slate-500">
+                          Changing team moves their accounts with them{u.role === "BDO" ? ", and their Agents and the Agents' accounts" : ""}. Money already credited stays with the team it was earned in.
+                        </p>
                         <Submit>Save</Submit>
                       </ActionForm>
                     </Sheet>

@@ -6,6 +6,7 @@ import { db, t } from "@/lib/db";
 import { requireRole, destroyUserSessions } from "@/lib/auth/session";
 import { hashPassword, passwordProblem } from "@/lib/auth/password";
 import { loadPerson } from "@/lib/access";
+import { followTeam, moveAgentWithAccounts } from "@/lib/people-data";
 import { canManageUser, canResetPassword, creatableRoles, type Role } from "@/lib/permissions";
 import { audit } from "@/lib/audit";
 import { fail, ok, okSecret, type ActionResult } from "@/lib/action-result";
@@ -135,11 +136,11 @@ export async function moveAgent(agentId: string, _prev: ActionResult | null, f: 
   const line = await resolveLine("AGENT", str(f, "reports_to"), null);
   if ("error" in line) return fail(line.error!);
   if (me.role === "TEAM_LEADER" && line.teamId !== me.teamId) return fail("Choose a BDO on your team.");
-  await db.update(t.users).set({ reportsTo: line.reportsTo, teamId: line.teamId }).where(eq(t.users.id, agentId));
-  await audit(me.id, "user.move_agent", "user", agentId, { reportsTo: line.reportsTo });
+  const moved = await moveAgentWithAccounts(agentId, line);
+  await audit(me.id, "user.move_agent", "user", agentId, { reportsTo: line.reportsTo, fromTeam: agent.teamId, toTeam: line.teamId, accountsMoved: moved });
   touch();
   revalidatePath("/accounts");
-  return ok(`${agent.name} moved.`);
+  return ok(moved ? `${agent.name} moved, with their ${moved} account${moved === 1 ? "" : "s"}.` : `${agent.name} moved.`);
 }
 
 export async function setUserStatus(userId: string, status: "ACTIVE" | "INACTIVE"): Promise<ActionResult> {
@@ -168,16 +169,17 @@ export async function updateUser(userId: string, _prev: ActionResult | null, f: 
   const line = await resolveLine(role, str(f, "reports_to"), requestedTeam);
   if ("error" in line) return fail(line.error!);
   const teamId = line.teamId;
-  const moveAccounts = f.get("move_accounts") === "on";
-  await db.transaction(async (tx) => {
+  // Accounts (and a BDO's Agents) always follow the person to their new team, so the
+  // old and new Team Leaders never see a split set. See followTeam().
+  const accountsMoved = await db.transaction(async (tx) => {
     await tx.update(t.users).set({ role, teamId, reportsTo: line.reportsTo, name: str(f, "name") ?? target.name }).where(eq(t.users.id, userId));
-    if (moveAccounts && teamId !== target.teamId) await tx.update(t.accounts).set({ teamId }).where(eq(t.accounts.ownerId, userId));
+    return teamId !== target.teamId ? followTeam(tx, userId, teamId) : 0;
   });
   if (role !== target.role) await destroyUserSessions(userId);
-  await audit(me.id, "user.update", "user", userId, { role, teamId, moveAccounts });
+  await audit(me.id, "user.update", "user", userId, { role, teamId, fromTeam: target.teamId, accountsMoved });
   touch();
   revalidatePath("/accounts");
-  return ok("Saved.");
+  return ok(accountsMoved ? `Saved. ${accountsMoved} account${accountsMoved === 1 ? "" : "s"} moved to the new team with them.` : "Saved.");
 }
 
 export async function createTeam(_prev: ActionResult | null, f: FormData): Promise<ActionResult> {

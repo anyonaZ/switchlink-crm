@@ -17,7 +17,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "user:create-admin": "tsx scripts/create-admin.ts",
     "import:corporates": "tsx scripts/import-corporates.ts",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "test:db": "node --conditions=react-server --import tsx --test --test-concurrency=1 tests/db/*.test.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "2.0.2",

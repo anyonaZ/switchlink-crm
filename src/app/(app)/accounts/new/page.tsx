@@ -29,7 +29,7 @@ export default async function NewAccountPage({ searchParams }: { searchParams: P
   return (
     <div className="mx-auto max-w-xl">
       <PageHeader title="New account" back={{ href: "/accounts", label: "Accounts" }} />
-      <NewAccountForm agents={agents} initialKind={kind} isAdmin={me.role === "ADMIN"} />
+      <NewAccountForm userId={me.id} agents={agents} initialKind={kind} isAdmin={me.role === "ADMIN"} />
     </div>
   );
 }

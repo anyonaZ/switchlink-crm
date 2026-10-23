@@ -5,6 +5,7 @@ import { Building2, GraduationCap, MapPin, Store, User, CheckCircle2, AlertTrian
 import ActionForm, { Field, Submit } from "@/components/ui/ActionForm";
 import { ROLE_LABELS } from "@/lib/labels";
 import { createAccount } from "@/lib/actions/accounts";
+import { clearDraft as dropDraft, readDraft, writeDraft } from "@/lib/drafts";
 
 type Kind = "MERCHANT" | "INDIVIDUAL" | "SCHOOL" | "CORPORATE";
 const KINDS: { value: Kind; label: string; hint: string; icon: typeof Store }[] = [
@@ -13,8 +14,9 @@ const KINDS: { value: Kind; label: string; hint: string; icon: typeof Store }[] 
   { value: "SCHOOL", label: "School", hint: "SNPL, Salary Advance", icon: GraduationCap },
   { value: "CORPORATE", label: "Corporate", hint: "Salary Advance", icon: Building2 },
 ];
-const DRAFT_KEY = "sl-new-account-draft";
-const DRAFT_SKIP = new Set(["latitude", "longitude", "accuracy", "captured_at", "kind"]);
+const DRAFT_FORM = "new-account";
+/** Never kept in a draft: the GPS fix (must be fresh) and identity/registration details. */
+const DRAFT_SKIP = new Set(["latitude", "longitude", "accuracy", "captured_at", "kind", "kra_pin", "registration_no", "date_of_birth"]);
 
 type Loc =
   | { state: "idle" }
@@ -35,7 +37,9 @@ export default function NewAccountForm({
   agents,
   initialKind,
   isAdmin = false,
+  userId,
 }: {
+  userId: string;
   agents: { id: string; name: string; role: keyof typeof ROLE_LABELS }[];
   initialKind?: string;
   isAdmin?: boolean;
@@ -47,15 +51,10 @@ export default function NewAccountForm({
 
   // Restore a draft typed earlier (e.g. before the signal dropped).
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (raw) {
-        const d = JSON.parse(raw) as Record<string, string>;
-        setDraft(d);
-        if (!kind && d._kind) setKind(d._kind as Kind);
-      }
-    } catch {
-      /* storage unavailable: nothing to restore */
+    const d = readDraft(DRAFT_FORM, userId);
+    if (d) {
+      setDraft(d);
+      if (!kind && d._kind) setKind(d._kind as Kind);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -67,19 +66,9 @@ export default function NewAccountForm({
     new FormData(form).forEach((v, k) => {
       if (!DRAFT_SKIP.has(k) && typeof v === "string" && v) data[k] = v;
     });
-    try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
-    } catch {
-      /* ignore */
-    }
+    writeDraft(DRAFT_FORM, userId, data);
   };
-  const clearDraft = () => {
-    try {
-      localStorage.removeItem(DRAFT_KEY);
-    } catch {
-      /* ignore */
-    }
-  };
+  const clearDraft = () => dropDraft(DRAFT_FORM, userId);
 
   const capture = () => {
     if (!("geolocation" in navigator)) {

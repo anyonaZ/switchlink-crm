@@ -6,7 +6,6 @@ import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { findAccountFor } from "@/lib/access";
 import { canUploadStatement } from "@/lib/permissions";
-import { audit } from "@/lib/audit";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { absolutePath, saveUpload } from "@/lib/storage";
 import { analyzeStatement } from "@/lib/statements/analyze";
@@ -58,28 +57,44 @@ export async function uploadStatement(_prev: ActionResult | null, f: FormData): 
     return fail("Only Admins upload statements.");
   }
 
+  // Only a failure inside ingestStatement (one transaction, audit included) means nothing
+  // was saved. Once it returns, the statement is committed: nothing after it may delete the
+  // file or say the upload failed.
+  let res: Awaited<ReturnType<typeof ingestStatement>>;
   try {
-    const res = await ingestStatement({ accountId: account.id, uploadedBy: me.id, fileName: file.name, filePath: rel, parsed: parsed.data });
-    await audit(me.id, "statement.upload", "account", account.id, { uploadId: res.uploadId, linesNew: res.linesNew, draws: res.drawsAmountNew });
-    revalidatePath("/statements");
-    revalidatePath(`/accounts/${account.id}`);
-    revalidatePath("/dashboard");
-    revalidatePath("/reports");
-    const draws = res.drawsNew
-      ? `${res.drawsNew} new draw${res.drawsNew === 1 ? "" : "s"} worth KES ${res.drawsAmountNew.toLocaleString("en-KE")}`
-      : "no new draws";
-    return ok(`${account.name}: ${res.linesNew} new line${res.linesNew === 1 ? "" : "s"} of ${res.linesTotal}, ${draws}.`, res.uploadId);
+    res = await ingestStatement({ accountId: account.id, uploadedBy: me.id, fileName: file.name, filePath: rel, parsed: parsed.data });
   } catch (e) {
     await discard();
-    await db.insert(t.statementUploads).values({
-      accountId: account.id,
-      fileName: file.name.slice(0, 200),
-      uploadedBy: me.id,
-      accepted: false,
-      message: e instanceof Error ? e.message.slice(0, 1000) : "Unknown error",
-      headerAccountNo: parsed.data.header.account_no,
-    });
+    await db
+      .insert(t.statementUploads)
+      .values({
+        accountId: account.id,
+        fileName: file.name.slice(0, 200),
+        uploadedBy: me.id,
+        accepted: false,
+        message: e instanceof Error ? e.message.slice(0, 1000) : "Unknown error",
+        headerAccountNo: parsed.data.header.account_no,
+      })
+      .catch(() => undefined);
     revalidatePath("/statements");
     return fail(`Statement rejected, nothing was saved. ${e instanceof Error ? e.message : ""}`.trim());
   }
+
+  for (const p of ["/statements", `/accounts/${account.id}`, "/dashboard", "/reports", "/leaderboard"]) {
+    try {
+      revalidatePath(p);
+    } catch {
+      /* the data is saved; a stale page refreshes on its own */
+    }
+  }
+  return ok(`${account.name}: ${uploadSummary(res)}.`, res.uploadId);
+}
+
+/** e.g. "12 new lines of 40, 2 new draws worth KES 15,000, 1 reversal of KES 5,000". */
+function uploadSummary(res: Awaited<ReturnType<typeof ingestStatement>>) {
+  const kes = (n: number) => `KES ${n.toLocaleString("en-KE")}`;
+  const parts = [`${res.linesNew} new line${res.linesNew === 1 ? "" : "s"} of ${res.linesTotal}`];
+  parts.push(res.drawsNew ? `${res.drawsNew} new draw${res.drawsNew === 1 ? "" : "s"} worth ${kes(res.drawsAmountNew)}` : "no new draws");
+  if (res.reversalsNew) parts.push(`${res.reversalsNew} reversal${res.reversalsNew === 1 ? "" : "s"} of ${kes(res.reversedAmountNew)}`);
+  return parts.join(", ");
 }

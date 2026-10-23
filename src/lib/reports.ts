@@ -66,7 +66,7 @@ export async function productTotals(me: Actor, start: Date, end: Date): Promise<
   const rows = await db.execute<{ product: string; total: string; draws: string; cycles: string | null; nolimit: string }>(sql`
     select d.product,
            sum(d.amount) as total,
-           count(*) filter (where d.amount > 0) as draws,
+           count(*) filter (where d.amount > 0 and not exists (select 1 from disbursements rv where rv.reverses_id = d.id)) as draws,
            sum(case when d.product = 'QUICK_FINANCE' then d.amount / nullif(${LIMIT_AT}, 0) end) as cycles,
            sum(case when d.product = 'QUICK_FINANCE' and ${LIMIT_AT} is null then d.amount else 0 end) as nolimit
       from disbursements d

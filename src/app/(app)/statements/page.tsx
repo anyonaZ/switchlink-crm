@@ -57,7 +57,8 @@ export default async function StatementsPage() {
                 </div>
                 {u.accepted ? (
                   <p className="mt-0.5 text-slate-600">
-                    {u.linesNew} new of {u.linesTotal} lines · {u.drawsNew} draws · {formatMoney(u.drawsAmountNew, { dash: false })}
+                    {u.linesNew} new of {u.linesTotal} lines · {u.drawsNew} draw{u.drawsNew === 1 ? "" : "s"} · {formatMoney(u.drawsAmountNew, { dash: false })}
+                    {u.reversalsNew > 0 && ` · ${u.reversalsNew} reversal${u.reversalsNew === 1 ? "" : "s"} (−${formatMoney(u.reversedAmountNew, { dash: false })})`}
                     {u.periodFrom && u.periodTo ? ` · ${formatDate(u.periodFrom)} to ${formatDate(u.periodTo)}` : ""}
                   </p>
                 ) : (

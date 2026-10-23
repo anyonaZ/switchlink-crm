@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 import { and, eq, gt } from "drizzle-orm";
 import { db, t } from "@/lib/db";
+import { reverseEntry } from "@/lib/ledger";
 import { requireUser } from "@/lib/auth/session";
 import { findAccountFor, loadPerson } from "@/lib/access";
 import { bdoFor, canEditAccount, canManageQf, canRecordDisbursement, splitAmount } from "@/lib/permissions";
@@ -137,7 +138,7 @@ export async function recordDisbursement(accountId: string, _prev: ActionResult 
   return ok(`${label} disbursement of KES ${amount.toLocaleString("en-KE")} recorded for ${creditedTo.name}.`);
 }
 
-/** Corrections never edit the ledger: they add an equal negative row. */
+/** Corrections never edit the ledger: they add an equal negative row (see reverseEntry). */
 export async function reverseDisbursement(disbursementId: string, reason = ""): Promise<ActionResult> {
   const me = await requireUser();
   const [d] = await db.select().from(t.disbursements).where(eq(t.disbursements.id, disbursementId));
@@ -145,39 +146,11 @@ export async function reverseDisbursement(disbursementId: string, reason = ""): 
   if (d.source === "STATEMENT") return fail("Statement entries are corrected by the statement itself, not by hand.");
   const acc = await findAccountFor(me, d.accountId);
   if (!acc || !canRecordDisbursement(me)) return fail("Only Admins reverse ledger entries.");
-  const [already] = await db.select({ id: t.disbursements.id }).from(t.disbursements).where(eq(t.disbursements.reversesId, d.id));
-  if (already) return fail("This entry has already been reversed.");
   if (!reason.trim()) return fail("Give a reason for the reversal.");
-  const note = `Reversal: ${reason.trim().slice(0, 300)}`;
-  // One slice of a shared-corporate split reverses every slice, so the split stays whole.
-  const originals = d.splitGroupId
-    ? await db.select().from(t.disbursements).where(and(eq(t.disbursements.splitGroupId, d.splitGroupId), gt(t.disbursements.amount, "0")))
-    : [d];
-  await db.transaction(async (tx) => {
-    for (const o of originals) {
-      const [done] = await tx.select({ id: t.disbursements.id }).from(t.disbursements).where(eq(t.disbursements.reversesId, o.id));
-      if (done) continue;
-      await tx.insert(t.disbursements).values({
-        accountId: o.accountId,
-        opportunityId: o.opportunityId,
-        product: o.product,
-        amount: (-Number(o.amount)).toFixed(2),
-        disbursedAt: o.disbursedAt,
-        creditedTo: o.creditedTo,
-        creditedBdoId: o.creditedBdoId,
-        creditedTeamId: o.creditedTeamId,
-        createdBy: me.id,
-        source: "MANUAL",
-        reversesId: o.id,
-        shareId: o.shareId,
-        splitGroupId: o.splitGroupId,
-        notes: note,
-      });
-    }
-    await audit(me.id, "disbursement.reverse", "disbursement", d.id, { reason, splitGroupId: d.splitGroupId ?? undefined, rows: originals.length }, tx);
-  });
+  const res = await reverseEntry(me.id, d, `Reversal: ${reason.trim().slice(0, 300)}`, reason);
+  if (!res.ok) return fail("This entry has already been reversed.");
   touch(d.accountId);
-  return ok(originals.length > 1 ? `Split entry reversed for all ${originals.length} BDOs.` : "Entry reversed.");
+  return ok(res.rows > 1 ? `Split entry reversed for all ${res.rows} BDOs.` : "Entry reversed.");
 }
 
 const KYC_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" };
