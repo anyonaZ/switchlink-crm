@@ -4,6 +4,8 @@
  * action adds the database checks (numbers already in use, accounts that
  * already exist, who to assign each account to).
  */
+import { kenyanMobile } from "@/lib/phone";
+
 export type ImportKind = "MERCHANT" | "INDIVIDUAL";
 export type ColumnKey =
   | "type"
@@ -53,15 +55,12 @@ export function mapHeaders(headers: string[]) {
 export function normalizePhone(raw: string): { phone: string | null; problem: string | null } {
   const v = raw.trim();
   if (!v) return { phone: null, problem: null };
-  const digits = v.replace(/\D/g, "");
-  if (/^254[17]\d{8}$/.test(digits)) return { phone: `0${digits.slice(3)}`, problem: null };
-  if (/^0[17]\d{8}$/.test(digits)) return { phone: digits, problem: null };
-  if (/^[17]\d{8}$/.test(digits)) return { phone: `0${digits}`, problem: null };
-  return { phone: null, problem: `"${v}" isn't a Kenyan phone number` };
+  const m = kenyanMobile(v);
+  return m ? { phone: m.local, problem: null } : { phone: null, problem: `"${v}" isn't a Kenyan phone number` };
 }
 
-/** Same comparison the CRM uses to stop two individuals sharing a number. */
-export const phoneKey = (phone: string) => phone.replace(/\D/g, "").replace(/^(254|0)/, "");
+/** Same comparison the database uses to stop two individuals sharing a number. */
+export const phoneKey = (phone: string) => kenyanMobile(phone)?.e164 ?? phone.replace(/\D/g, "");
 export const nameKey = (name: string) => name.trim().toLowerCase().replace(/\s+/g, " ");
 
 export function parseKind(raw: string): ImportKind | null {

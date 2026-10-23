@@ -7,6 +7,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useShowSecret } from "@/components/ui/SecretDialog";
 import { changeStage } from "@/lib/actions/crm";
 import { STAGES, STAGE_LABELS, type Stage } from "@/lib/labels";
+import { BUSINESS_TZ } from "@/lib/timezone";
 
 /** Stage dropdown that saves on change, with an instant (optimistic) update. */
 export function StageSelect({ opportunityId, stage }: { opportunityId: string; stage: Stage }) {
@@ -94,7 +95,7 @@ export function QuickDates({ targetId }: { targetId: string }) {
     const el = document.getElementById(targetId) as HTMLInputElement | null;
     if (!el) return;
     const d = new Date(Date.now() + days * 86400000);
-    el.value = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Nairobi" }).format(d);
+    el.value = new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TZ }).format(d);
   };
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">

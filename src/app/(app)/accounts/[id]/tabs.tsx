@@ -9,9 +9,11 @@ import { changeAccountStatus, declineVerification, reassignAccount, updateAccoun
 import { addComment, addContact, cancelFollowUp, completeFollowUp, createOpportunity, deleteContact, logActivity, scheduleFollowUp, updateOpportunity } from "@/lib/actions/crm";
 import { recordDisbursement, reverseDisbursement, setQfLimit, uploadKycDocument } from "@/lib/actions/money";
 import { ACTIVITY_LABELS, ACTIVITY_TYPES, PRODUCTS_FOR_KIND, PRODUCT_LABELS, ROLE_LABELS, STAGE_LABELS, STATUS_LABELS, type Stage } from "@/lib/labels";
-import { formatDate, formatDateTime, formatMoney, formatShortDate, todayYmd } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, formatMonth, formatShortDate, todayYmd } from "@/lib/format";
+import { BUSINESS_TZ } from "@/lib/timezone";
 import { shortAddress } from "@/lib/geo/geocode";
 import ShareCard from "@/components/ShareCard";
+import RequestKey from "@/components/RequestKey";
 import ShareRequestForm from "@/components/ShareRequestForm";
 import { requestShare } from "@/lib/actions/shares";
 import type { ShareView } from "@/lib/shares";
@@ -730,7 +732,7 @@ export function MoneyTab({
 }: {
   acc: Account;
   disbursements: {
-    d: { id: string; product: Product; amount: string; disbursedAt: Date; source: "MANUAL" | "STATEMENT"; notes: string | null; reversesId: string | null; splitGroupId: string | null };
+    d: { id: string; product: Product; amount: string; disbursedAt: Date; createdAt: Date; source: "MANUAL" | "STATEMENT"; notes: string | null; reversesId: string | null; splitGroupId: string | null };
     creditedName: string | null;
   }[];
   limits: { l: { id: string; amount: string; effectiveFrom: Date; note: string | null }; by: string | null }[];
@@ -789,6 +791,7 @@ export function MoneyTab({
         {isQf && canSetLimit && (
           <Sheet title="Set QF limit" trigger="Set QF limit" triggerClassName="btn-secondary flex-1">
             <ActionForm action={setQfLimit.bind(null, acc.id)}>
+              <RequestKey />
               <Field label="Limit (KES)" name="amount">
                 <input id="amount" name="amount" inputMode="decimal" required defaultValue={currentLimit ?? ""} className="input" />
               </Field>
@@ -805,6 +808,7 @@ export function MoneyTab({
         {creditOptions.length > 0 && (
           <Sheet title="Record a disbursement" trigger="Record disbursement" triggerClassName="btn-secondary flex-1">
             <ActionForm action={recordDisbursement.bind(null, acc.id)}>
+              <RequestKey />
               <Field label="Product" name="product">
                 <select id="product" name="product" className="input">
                   {products.map((p) => (
@@ -901,6 +905,13 @@ export function MoneyTab({
                       <ProductBadge product={d.product} />
                       <span className={`font-medium tabular-nums ${amt < 0 ? "text-red-700" : "text-ink"}`}>{formatMoney(amt, { dash: false })}</span>
                     </p>
+                    {d.reversesId && (
+                      <p className="mt-0.5 text-xs text-red-700" data-testid="reversal-dating">
+                        {d.source === "MANUAL"
+                          ? `Reversal entered ${formatDate(d.createdAt)}; counts in ${formatMonth(d.disbursedAt)}, the month of the original entry`
+                          : `Reversed by Pesi on ${formatDate(d.disbursedAt)}; counts in ${formatMonth(d.disbursedAt)}`}
+                      </p>
+                    )}
                     <p className="mt-0.5 truncate text-xs text-slate-500">
                       {formatDate(d.disbursedAt)} · {creditedName ?? "No one"}
                       {d.splitGroupId ? "" : d.source === "STATEMENT" ? " · statement" : " · manual"}
@@ -925,7 +936,7 @@ export function MoneyTab({
     </div>
   );
 }
-const formatYm = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Nairobi", year: "numeric", month: "2-digit" }).format(d);
+const formatYm = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TZ, year: "numeric", month: "2-digit" }).format(d);
 
 // --- Documents --------------------------------------------------------------
 export function DocumentsTab({

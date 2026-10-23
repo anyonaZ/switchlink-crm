@@ -7,6 +7,7 @@ import { accountScope, type Actor } from "@/lib/permissions";
 import { Empty, Section, Stat } from "@/components/ui/Page";
 import { ProductBadge, StageBadge } from "@/components/ui/Badges";
 import { ACTIVITY_LABELS, ROLE_LABELS } from "@/lib/labels";
+import { healthReport } from "@/lib/health";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { getCalendarPeriodRange } from "@/lib/timezone";
 import { APP_TIMEZONE } from "@/lib/config";
@@ -78,6 +79,56 @@ async function awaitingVerification(me: Actor) {
     .where(and(accountScope(me), eq(t.accounts.status, "PENDING_VERIFICATION")))
     .orderBy(asc(t.accounts.verificationRequestedAt))
     .limit(100);
+}
+
+/** Admin only: anything wrong with the system itself (backups, restore drill, housekeeping, migrations). */
+async function systemProblems() {
+  const report = await healthReport(true);
+  return Object.entries(report.checks ?? {})
+    .filter(([, c]) => !c.ok)
+    .map(([name, c]) => ({ name, detail: c.detail ?? "failed" }));
+}
+const CHECK_LABELS: Record<string, string> = {
+  database: "Database",
+  migrations: "Database updates",
+  storage: "File storage",
+  maintenance: "Hourly housekeeping",
+  backup: "Backups",
+  restoreDrill: "Restore drill",
+};
+
+function SystemAlerts({ problems, conflicts }: { problems: Awaited<ReturnType<typeof systemProblems>>; conflicts: { id: string; name: string; phone: string | null }[] }) {
+  if (!problems.length && !conflicts.length) return null;
+  return (
+    <div className="space-y-3" data-testid="system-alerts">
+      {problems.length > 0 && (
+        <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-medium">Needs attention</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {problems.map((p) => (
+              <li key={p.name}>
+                <strong>{CHECK_LABELS[p.name] ?? p.name}:</strong> {p.detail}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs">See README → Operations for backups and the monthly restore drill.</p>
+        </div>
+      )}
+      {conflicts.length > 0 && (
+        <Section title={`Individuals sharing a phone number (${conflicts.length})`} subtitle="Found when the one-number-per-individual rule was switched on. Correct the number, or mark the duplicate Inactive.">
+          <ul className="card divide-y divide-slate-100">
+            {conflicts.map((c) => (
+              <li key={c.id}>
+                <Link href={`/accounts/${c.id}`} className="block px-4 py-2.5 text-sm active:opacity-70">
+                  <span className="font-medium text-ink">{c.name}</span> <span className="text-xs text-slate-500">{c.phone}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+    </div>
+  );
 }
 
 function VerificationQueue({ rows }: { rows: Awaited<ReturnType<typeof awaitingVerification>> }) {
@@ -326,6 +377,18 @@ export default async function Dashboard() {
     waitingOnMe(me),
     me.role === "ADMIN" ? awaitingVerification(me) : Promise.resolve([]),
   ]);
+  const [problems, conflicts] =
+    me.role === "ADMIN"
+      ? await Promise.all([
+          systemProblems(),
+          db
+            .select({ id: t.accounts.id, name: t.accounts.name, phone: t.accounts.phone })
+            .from(t.accounts)
+            .where(and(eq(t.accounts.phoneConflict, true), ne(t.accounts.status, "INACTIVE")))
+            .orderBy(asc(t.accounts.name))
+            .limit(50),
+        ])
+      : [[], []];
 
   return (
     <div className="space-y-6">
@@ -333,6 +396,7 @@ export default async function Dashboard() {
         <h1 className="text-xl font-semibold text-ink">Hi {first}</h1>
         <p className="text-sm text-slate-500">{me.role === "ADMIN" ? "Every team" : "Your team"}, this month.</p>
       </div>
+      <SystemAlerts problems={problems} conflicts={conflicts} />
       <VerificationQueue rows={toVerify} />
       <Section
         title={me.role === "ADMIN" ? "This week's targets (all teams)" : "Team targets this week"}

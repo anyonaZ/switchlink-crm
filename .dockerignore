@@ -6,3 +6,5 @@ storage
 backups
 tests
 *.log
+data
+rclone

@@ -26,18 +26,26 @@ export async function setWeeklyTarget(_prev: ActionResult | null, f: FormData): 
   const problem = targetProblem(values);
   if (problem) return fail(problem);
   const monday = weekStartOf();
-  const [existing] = await db
-    .select()
-    .from(t.weeklyTargets)
-    .where(and(eq(t.weeklyTargets.userId, me.id), eq(t.weeklyTargets.weekStart, monday)));
-  if (existing && !canEditTarget(existing.createdAt)) return fail("This week's targets are locked. They can only be changed on the day they were set.");
   const row = { ...values, disbursement: values.disbursement.toFixed(2) };
-  if (existing) {
-    await db.update(t.weeklyTargets).set({ ...row, updatedAt: new Date() }).where(eq(t.weeklyTargets.id, existing.id));
-  } else {
-    await db.insert(t.weeklyTargets).values({ userId: me.id, weekStart: monday, ...row });
-  }
-  await audit(me.id, existing ? "target.update" : "target.set", "user", me.id, { week: monday, ...values });
+  // One transaction, row locked: a double tap can't set the week twice or slip past the lock.
+  const outcome = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(t.weeklyTargets)
+      .where(and(eq(t.weeklyTargets.userId, me.id), eq(t.weeklyTargets.weekStart, monday)))
+      .for("update");
+    if (existing && !canEditTarget(existing.createdAt)) return "locked" as const;
+    if (existing) {
+      await tx.update(t.weeklyTargets).set({ ...row, updatedAt: new Date() }).where(eq(t.weeklyTargets.id, existing.id));
+    } else {
+      const inserted = await tx.insert(t.weeklyTargets).values({ userId: me.id, weekStart: monday, ...row }).onConflictDoNothing().returning({ id: t.weeklyTargets.id });
+      if (!inserted.length) return "raced" as const;
+    }
+    await audit(me.id, existing ? "target.update" : "target.set", "user", me.id, { week: monday, ...values }, tx);
+    return existing ? ("updated" as const) : ("set" as const);
+  });
+  if (outcome === "locked") return fail("This week's targets are locked. They can only be changed on the day they were set.");
+  if (outcome === "raced") return ok("Targets set. Have a great week!");
   revalidatePath("/", "layout");
-  return ok(existing ? "Targets updated." : "Targets set. Have a great week!");
+  return ok(outcome === "updated" ? "Targets updated." : "Targets set. Have a great week!");
 }

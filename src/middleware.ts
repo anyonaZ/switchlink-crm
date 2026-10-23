@@ -6,12 +6,13 @@ import { NextResponse, type NextRequest } from "next/server";
  * every page and action via requireUser(), so this file is not a security
  * boundary on its own.
  */
-const PUBLIC = ["/login", "/manifest.webmanifest", "/sw.js", "/offline", "/humans.txt", "/api/signature"];
+const PUBLIC = ["/login", "/manifest.webmanifest", "/sw.js", "/offline", "/humans.txt", "/api/signature", "/api/health"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (PUBLIC.some((p) => pathname === p || pathname.startsWith(p + "/"))) return NextResponse.next();
   if (!req.cookies.get("sl_session")) {
+    if (pathname.startsWith("/api/")) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
     const url = req.nextUrl.clone();
     url.pathname = "/login";
     url.search = "";

@@ -21,12 +21,13 @@ if (process.env.NEXT_PHASE !== "phase-production-build") {
   }
 }
 
-// Delete individual accounts not activated within 30 days (see src/lib/retention.ts). Hourly.
+// Hourly housekeeping: retention, expired upload previews, sessions, sign-in throttle
+// (see src/lib/maintenance.ts).
 if (process.env.NEXT_PHASE !== "phase-production-build") {
   const sweep = () =>
-    import("@/lib/retention")
-      .then(({ deleteExpiredIndividuals }) => deleteExpiredIndividuals())
-      .catch((e) => console.error("[retention] sweep failed", e));
+    import("@/lib/maintenance")
+      .then(({ runMaintenance }) => runMaintenance())
+      .catch((e) => console.error("[maintenance] failed", e));
   setTimeout(sweep, 90_000);
   setInterval(sweep, 60 * 60_000).unref?.();
 }

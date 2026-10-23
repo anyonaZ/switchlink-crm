@@ -13,7 +13,10 @@ import { audit } from "@/lib/audit";
 import { fail, ok, type ActionResult } from "@/lib/action-result";
 import { PRODUCTS_FOR_KIND, PRODUCT_LABELS } from "@/lib/labels";
 import { nairobiToInstant } from "@/lib/format";
-import { saveUpload } from "@/lib/storage";
+import { removeUpload, saveUploadBytes } from "@/lib/storage";
+import { runOnce } from "@/lib/idempotency";
+import { sniffKyc } from "@/lib/files";
+import { scanBytes } from "@/lib/av";
 
 const str = (f: FormData, k: string) => {
   const v = String(f.get(k) ?? "").trim();
@@ -40,10 +43,13 @@ export async function setQfLimit(accountId: string, _prev: ActionResult | null, 
   if (amount === null) return fail("Enter the limit in KES.", { amount: "Enter an amount above 0" });
   const effective = nairobiToInstant(String(f.get("effective_from") ?? ""), "00:00");
   if (!effective) return fail("Pick the date the limit takes effect.", { effective_from: "Required" });
-  await db.insert(t.qfLimits).values({ accountId, amount: amount.toFixed(2), effectiveFrom: effective, setBy: me.id, note: str(f, "note") });
-  await audit(me.id, "qf_limit.set", "account", accountId, { amount });
+  const { value } = await runOnce(str(f, "request_key"), me.id, "qf_limit.set", async (tx) => {
+    await tx.insert(t.qfLimits).values({ accountId, amount: amount.toFixed(2), effectiveFrom: effective, setBy: me.id, note: str(f, "note") });
+    await audit(me.id, "qf_limit.set", "account", accountId, { amount }, tx);
+    return { message: `QF limit set to KES ${amount.toLocaleString("en-KE")}.` };
+  });
   touch(accountId);
-  return ok(`QF limit set to KES ${amount.toLocaleString("en-KE")}.`);
+  return ok(value.message);
 }
 
 /** Who a disbursement on this account may be credited to, for this person. */
@@ -106,18 +112,21 @@ export async function recordDisbursement(accountId: string, _prev: ActionResult 
         notes: [`Shared ${pct}% of KES ${amount.toLocaleString("en-KE")}`, notes].filter(Boolean).join(" · ").slice(0, 500),
       };
     });
-    await db.transaction(async (tx) => {
+    const who = slices.map((x, i) => `${people[i]!.name} KES ${x.amount.toLocaleString("en-KE")}`).join(", ");
+    const { value } = await runOnce(str(f, "request_key"), me.id, "disbursement.record", async (tx) => {
       await tx.insert(t.disbursements).values(rows);
       await audit(me.id, "disbursement.record_split", "account", accountId, { amount, product, shareId: share.id, splitGroupId: groupId, slices }, tx);
+      return { message: `${label} disbursement of KES ${amount.toLocaleString("en-KE")} split between the BDOs sharing this corporate: ${who}.` };
     });
     touch(accountId);
-    const who = slices.map((x, i) => `${people[i]!.name} KES ${x.amount.toLocaleString("en-KE")}`).join(", ");
-    return ok(`${label} disbursement of KES ${amount.toLocaleString("en-KE")} split between the BDOs sharing this corporate: ${who}.`);
+    return ok(value.message);
   }
 
   const creditedTo = await loadPerson(str(f, "credited_to") ?? acc.ownerId);
   if (!creditedTo) return fail("Choose who this disbursement is credited to.", { credited_to: "Required" });
-  const [row] = await db
+  // The entry and its audit row are saved together, once per form submission.
+  const { value } = await runOnce(str(f, "request_key"), me.id, "disbursement.record", async (tx) => {
+    const [row] = await tx
     .insert(t.disbursements)
     .values({
       accountId,
@@ -133,9 +142,11 @@ export async function recordDisbursement(accountId: string, _prev: ActionResult 
       notes,
     })
     .returning({ id: t.disbursements.id });
-  await audit(me.id, "disbursement.record", "disbursement", row.id, { accountId, amount, product, creditedTo: creditedTo.id });
+    await audit(me.id, "disbursement.record", "disbursement", row.id, { accountId, amount, product, creditedTo: creditedTo.id }, tx);
+    return { message: `${label} disbursement of KES ${amount.toLocaleString("en-KE")} recorded for ${creditedTo.name}.` };
+  });
   touch(accountId);
-  return ok(`${label} disbursement of KES ${amount.toLocaleString("en-KE")} recorded for ${creditedTo.name}.`);
+  return ok(value.message);
 }
 
 /** Corrections never edit the ledger: they add an equal negative row (see reverseEntry). */
@@ -153,9 +164,15 @@ export async function reverseDisbursement(disbursementId: string, reason = ""): 
   return ok(res.rows > 1 ? `Split entry reversed for all ${res.rows} BDOs.` : "Entry reversed.");
 }
 
-const KYC_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" };
 const MAX_KYC_BYTES = 10 * 1024 * 1024;
 
+/**
+ * KYC uploads are checked by their content, not the type the browser claims:
+ * only real JPEG, PNG, WebP or PDF files (by their leading bytes) are stored,
+ * under a random name, with a SHA-256 that downloads are checked against, and
+ * virus-scanned when a scanner is configured (src/lib/av.ts). The file and its
+ * database row/audit entry are saved together or not at all.
+ */
 export async function uploadKycDocument(accountId: string, _prev: ActionResult | null, f: FormData): Promise<ActionResult> {
   const me = await requireUser();
   const acc = await findAccountFor(me, accountId);
@@ -164,20 +181,35 @@ export async function uploadKycDocument(accountId: string, _prev: ActionResult |
   if (!docType) return fail("Say what the document is.", { doc_type: "Required" });
   const file = f.get("file");
   if (!(file instanceof File) || file.size === 0) return fail("Choose a photo or PDF.", { file: "Required" });
-  const ext = KYC_TYPES[file.type];
-  if (!ext) return fail("Use a photo (JPG, PNG, WebP) or a PDF.");
   if (file.size > MAX_KYC_BYTES) return fail("That file is over 10 MB.");
-  const rel = await saveUpload(`kyc/${accountId}`, file, ext);
-  await db.insert(t.kycDocuments).values({
-    accountId,
-    docType: docType.slice(0, 120),
-    filePath: rel,
-    originalName: file.name.slice(0, 200) || `document.${ext}`,
-    mimeType: file.type,
-    sizeBytes: file.size,
-    uploadedBy: me.id,
-  });
-  await audit(me.id, "kyc.upload", "account", accountId, { docType });
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const sniffed = sniffKyc(bytes);
+  if (!sniffed.ok) return fail(sniffed.error);
+  const scan = await scanBytes(bytes);
+  if (scan.status === "infected") {
+    await audit(me.id, "kyc.rejected_infected", "account", accountId, { signature: scan.signature, name: file.name.slice(0, 200) });
+    return fail("That file was flagged by the virus scanner and wasn't saved.");
+  }
+  if (scan.status === "error") return fail(`${scan.message} Try again in a minute; nothing was saved.`);
+  const { rel, sha256 } = await saveUploadBytes(`kyc/${accountId}`, bytes, sniffed.ext);
+  try {
+    await db.transaction(async (tx) => {
+      await tx.insert(t.kycDocuments).values({
+        accountId,
+        docType: docType.slice(0, 120),
+        filePath: rel,
+        originalName: file.name.slice(0, 200) || `document.${sniffed.ext}`,
+        mimeType: sniffed.mime,
+        sizeBytes: bytes.length,
+        sha256,
+        uploadedBy: me.id,
+      });
+      await audit(me.id, "kyc.upload", "account", accountId, { docType, mime: sniffed.mime, sha256, scanned: scan.status === "clean" }, tx);
+    });
+  } catch (e) {
+    await removeUpload(rel);
+    throw e;
+  }
   revalidatePath(`/accounts/${accountId}`);
   return ok("Document uploaded.");
 }

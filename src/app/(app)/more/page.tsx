@@ -6,6 +6,7 @@ import { logout } from "@/lib/actions/auth";
 import { ROLE_LABELS } from "@/lib/labels";
 import { initials } from "@/lib/format";
 import Signature from "@/components/Signature";
+import { RELEASE } from "@/lib/version";
 
 export const metadata = { title: "More" };
 
@@ -50,6 +51,7 @@ export default async function MorePage() {
         </button>
       </form>
       <Signature className="text-center text-xs text-slate-400" />
+      <p className="text-center text-[11px] text-slate-400" data-testid="version">Version {RELEASE}</p>
     </div>
   );
 }

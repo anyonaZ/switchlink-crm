@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getSessionUser } from "@/lib/auth/session";
+import { apiUser } from "@/lib/auth/api";
 import { reverseGeocode, shortAddress } from "@/lib/geo/geocode";
 
 /**
@@ -8,8 +8,8 @@ import { reverseGeocode, shortAddress } from "@/lib/geo/geocode";
  * delays, the agent saving the account.
  */
 export async function GET(req: NextRequest) {
-  const me = await getSessionUser();
-  if (!me) return NextResponse.json({ line: null }, { status: 401 });
+  const auth = await apiUser();
+  if (!auth.ok) return auth.response;
   const lat = Number(req.nextUrl.searchParams.get("lat"));
   const lng = Number(req.nextUrl.searchParams.get("lng"));
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return NextResponse.json({ line: null }, { status: 400 });

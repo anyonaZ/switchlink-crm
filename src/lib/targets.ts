@@ -2,9 +2,7 @@
  * Weekly targets and account retention: pure rules (no database), unit-tested
  * in tests/targets.test.ts. Weeks run Monday to Sunday in Nairobi time.
  */
-import { getZonedParts, startOfZonedDay } from "@/lib/timezone";
-
-const TZ = "Africa/Nairobi";
+import { BUSINESS_TZ as TZ, getZonedParts, startOfZonedDay } from "@/lib/timezone";
 const ymd = (y: number, m: number, d: number) => `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 
 /** The Monday (YYYY-MM-DD, Nairobi) of the week containing `now`. */

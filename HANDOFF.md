@@ -173,7 +173,7 @@ that the forced password change and rename work.
      "No location was captured".
 10. **Imported Lindsey and Sharon's corporate lead list.**
     - **Source:** `DOC-20261003-WA0071.xlsx` was converted to
-      `data/corporates-lindsey-sharon.json` (80 corporates).
+      `data/corporates-lindsey-sharon.json` (80 corporates; later moved out of the repository, see item 37).
     - **Loading it:** `npm run import:corporates` (`scripts/import-corporates.ts`).
       Lindsey Erodanga (Team Leader, with a team) and Sharon Achola (BDO) must
       exist first.
@@ -333,6 +333,80 @@ that the forced password change and rename work.
     parser. The two real client statements are still not in the repo; the
     `STATEMENT_DIR` tests in `tests/statements.test.ts` use them when present.
 
+### Session of 23 October 2026 (later): technical-review fixes
+
+Zacc shared an external technical review of v5.9. Items P1.1–P1.5 were already
+fixed above; everything else that is code or operations was done here.
+
+25. **API gate** (`src/lib/auth/api.ts` → `apiUser()`): session + active user +
+    forced password change done + optional roles, for every API route. Unit test
+    fails if a route under `src/app/api` doesn't use it (only `/api/signature` and
+    `/api/health` are public). Middleware answers unauthenticated `/api/*` with a
+    401 JSON instead of a redirect.
+26. **CSV** (`src/lib/csv.ts`): any text starting (after spaces) with = + - @ tab
+    CR or their full-width forms is prefixed with `'`; only real numbers and
+    strings that are entirely a number are left alone. Used by both exports.
+27. **CSP and headers** (`next.config.mjs`): strict CSP ('unsafe-inline' scripts
+    are needed by Next without nonces), COOP/CORP; `/api/files/*` gets a
+    `sandbox` CSP (listed after the site-wide rule, which would otherwise win).
+28. **Sign-in throttle** in the database (`login_throttle`, `src/lib/auth/throttle.ts`):
+    atomic upsert per `ue:<ip>|<email>` (10/10 min) and `ip:<ip>` (100/10 min);
+    failed-login counter is now one atomic UPDATE. Client IP = last
+    X-Forwarded-For entry (Caddy sets it).
+29. **Phones** (`src/lib/phone.ts`, SQL `kenya_phone()`): generated column
+    `accounts.phone_canonical` (+2547…), partial unique index
+    `accounts_individual_phone_idx` for individuals. Migration 0008 stores
+    individuals' phones as 07…, and FLAGS (never deletes) later duplicates with
+    `phone_conflict` (audit `account.phone_conflict`); the Admin dashboard lists
+    them; saving the account with a fixed number clears the flag. Forms require a
+    Kenyan mobile for individuals; unique clashes become field errors.
+30. **Bulk-upload previews** (`src/lib/import/previews.ts`): 0600 files, 30-min TTL
+    checked at commit, deleted on commit/expiry, swept hourly. Commit re-checks the
+    owner (still active, still assignable), phone, Pesi and name, each row in its own
+    savepoint; skipped rows are listed with their reason.
+31. **Atomic audits + idempotency.** Every state-changing action writes its audit
+    inside the same transaction (unit test enforces this; standalone events
+    allowed: `login`, `login.locked`, `kyc.rejected_infected`). Money forms send a
+    hidden `request_key` (`<RequestKey/>`); `runOnce()` (`src/lib/idempotency.ts`,
+    table `idempotency_keys`) claims it in the write's transaction and replays the
+    first result. Weekly targets use SELECT … FOR UPDATE + ON CONFLICT.
+32. **Activity ↔ opportunity:** checked in `crm.ts` and enforced by a composite FK
+    `activities(opportunity_id, account_id) → opportunities(id, account_id)`
+    (hand-written in 0008, not in the Drizzle schema; the single-column FK still
+    does ON DELETE SET NULL).
+33. **KYC files** (`src/lib/files.ts`, `src/lib/av.ts`, `src/lib/storage.ts`): magic
+    bytes decide the type; PDFs with /JavaScript, /JS, /Launch, /EmbeddedFile,
+    /RichMedia or without %%EOF are refused; SHA-256 stored and checked on every
+    download (409 + audit `kyc.integrity_failed` on mismatch); files 0600, folders
+    0700; optional ClamAV (`CLAMAV_HOST`, compose profile `antivirus`), uploads
+    refused if the scanner is configured but unreachable.
+34. **Limit warnings** use the QF limit in force on each line's date
+    (`limitWarnings()` in `analyze.ts`).
+35. **Reversal dating** is unchanged but now labelled in the ledger: manual
+    reversals count in the original entry's month; statement reversals on Pesi's
+    posting date. NEEDS A FINANCE DECISION (see section 7).
+36. **Timezone:** fixed to `BUSINESS_TZ` in `src/lib/timezone.ts`; `APP_TIMEZONE`
+    removed from `.env.example` (a different value only logs a warning).
+37. **Lead list out of the repo:** `data/` is git- and docker-ignored, the file was
+    removed (and purged from this repo's history); `import:corporates` needs
+    `--file`. Zacc has the JSON separately.
+38. **Operations:** `/api/health` (`src/lib/health.ts`): public `{status, version,
+    commit}`; detailed checks for Admins or `HEALTH_TOKEN` (database, migrations,
+    storage, maintenance, backup age ≤36 h, restore drill ≤40 days). Docker health
+    checks; Caddy waits for a healthy app; log size caps. `backup` service
+    (`scripts/backup-run.sh`, `backup-loop.sh`): nightly 01:30, verified,
+    AES-256 with `BACKUP_PASSPHRASE`, rclone off-site, webhook on failure.
+    `scripts/restore-drill.sh` and `scripts/restore.sh`. Hourly
+    `src/lib/maintenance.ts`. Admin **Audit log** page + masked CSV export.
+    Version 6.1.0 from package.json + `GIT_COMMIT` (`scripts/release.sh`).
+    `db` connection is lazy, so `next build` works without `DATABASE_URL`
+    (Docker build stage).
+39. **Tests:** unit 46 (`tests/security.test.ts` new), database 30
+    (`tests/db/hardening.db.test.ts` new). The backup/drill scripts were run for real
+    against PostgreSQL here (encrypted backup, drill pass, drill fails on a tampered
+    file and on a wrong passphrase, webhook on failure). Docker images could NOT be
+    built here (Docker Hub is blocked from this workspace): build them on the server.
+
 ## 6. How to run
 
 **Laptop:** Node 22, Postgres 16, `pip install xlrd`.
@@ -352,48 +426,37 @@ which prints a random temporary password. See README → Deployment.
 
 ## 7. Suggested before deployment
 
-These are not done yet, roughly in priority order.
+Done since the review: backups (scheduled, encrypted, off-site option, drill),
+monitoring (/api/health), audit log viewer, bulk import, sign-in throttle,
+version/commit display. Still open, roughly in priority order:
 
-1. **Don't ship the known admin password.** On the server, use
-   `user:create-admin` (random password) instead of `db:seed`, or seed and sign
-   in right away to change it. Use a real email as the login.
-2. **Backups off the machine.** Schedule `scripts/backup.sh` nightly, copy
-   `./backups` to another disk or cloud storage, and **test a restore once**.
-3. **Server hardening.**
-   - Open only ports 80/443 (and SSH by key only).
-   - Turn on automatic security updates and put the server on a UPS.
-   - Set Docker log size limits (`logging: max-size`) so logs can't fill the disk.
-   - If the office IP changes, set up dynamic DNS.
-4. **Office internet is a single point of failure.** Field staff can't reach
-   the CRM if the office line or power goes down. Consider a cheap VPS, or at
-   least a backup internet line.
-5. **Login throttle and shared IPs.** The per-IP sign-in limit (30 attempts per
-   10 min) is kept in memory. Staff on the same office Wi-Fi or mobile-carrier
-   NAT share one IP, so one person mistyping could slow down sign-in for
-   others. Consider keying the limit on email + IP.
-6. **Notifications.** Nothing tells a Team Leader or Admin that a sharing
-   request is waiting, or an agent that a follow-up is due, unless they open
-   the app. Options: email via SMTP, SMS/WhatsApp (e.g. Africa's Talking —
-   paid), or web push (free).
-7. **Bulk import of existing schools and corporates.** Merchants and
-   individuals have Bulk upload, and corporates have `import:corporates`;
-   schools still have no import.
-8. **Kenya Data Protection Act 2019.** The CRM stores names, phone numbers and GPS
-   locations. Check whether Switchlink must register with the ODPC, and add a
-   privacy notice, consent wording and a retention/deletion policy. (This is
-   not legal advice; confirm with their legal or compliance person.)
-9. **Audit log viewer.** Everything is logged in `audit_log`, but there's no
-    screen to read it yet. A simple Admin page would help (also for
-    `signature.mismatch`).
-10. **Monitoring.** Add a `/api/health` endpoint plus a free uptime checker
-    (e.g. Uptime Kuma on another machine) that alerts when the CRM is down.
-11. **Real-world test run.** Pilot with 2–3 BDOs on their own phones and real
-    Pesi statements for a week. Rebuild an end-to-end test with its own test
-    data (the old one used the demo seed).
-12. **Set `GEOCODER_CONTACT_EMAIL`** to a real Switchlink address. This is a
-    Nominatim usage-policy requirement.
-13. **Short user guide or training session** for each role (Agent, BDO, Team
-    Leader, Admin).
+1. **Build and start on the server** (`scripts/release.sh`), then check
+   `/api/health` as an Admin. Docker images weren't buildable in the dev workspace.
+2. **Set `BACKUP_PASSPHRASE` and `RCLONE_REMOTE`**, store the passphrase off the
+   server, run `scripts/backup.sh` then `scripts/restore-drill.sh` once. Set
+   `ALERT_WEBHOOK_URL` and point an uptime monitor at `/api/health` with `HEALTH_TOKEN`.
+3. **Don't ship the known admin password.** Use `user:create-admin` (random
+   password) on the server.
+4. **Finance decision: reversal dating.** Manual reversals restate the original
+   month; statement reversals post on Pesi's date. If Finance wants "post in the
+   month the correction was made" (or both views), change `reverseEntry()` in
+   `src/lib/ledger.ts` (it copies `disbursedAt` from the original) and reports.
+5. **Server hardening.** Only 80/443 open (SSH by key), automatic security
+   updates, UPS, **full-disk encryption**, dynamic DNS if the office IP changes.
+6. **Decide on virus scanning** (ClamAV needs ~1.5 GB RAM): `docker compose
+   --profile antivirus up -d` and `CLAMAV_HOST=clamav`.
+7. **Office internet is a single point of failure.** Consider a VPS or a backup line.
+8. **Notifications** (follow-ups due, share approvals, verification queue,
+   missing targets): email/SMS/web push. Not built.
+9. **Kenya Data Protection Act 2019.** ODPC registration, privacy notice (mention
+   GPS, KYC, and that deletion records keep name + phone), consent wording,
+   retention schedule. Not legal advice; confirm with their legal/compliance person.
+10. **Stronger CSP:** nonce-based scripts would let us drop 'unsafe-inline'; needs
+    every page dynamic (they mostly are) and middleware to set the nonce.
+11. **Pilot** with 2–3 BDOs on their phones and real Pesi statements for a week
+    (run `STATEMENT_DIR=… npm test` with the real statements first).
+12. **`GEOCODER_CONTACT_EMAIL`** set to a real Switchlink address.
+13. **User guide / training** per role.
 
 ## 8. Things to know / gotchas
 
@@ -408,7 +471,11 @@ These are not done yet, roughly in priority order.
   Use `DELETE` instead.
 - Africa/Nairobi time everywhere (`src/lib/format.ts`, `timezone.ts`).
 - Money is `numeric(14,2)`, summed in SQL, never in the browser.
-- Unit tests: 37 (`npm test`); database tests: 13 (`npm run test:db`). All passing.
+- Unit tests: 46 (`npm test`); database tests: 30 (`npm run test:db`). All passing.
+- Don't run Prettier over existing files: the code isn't Prettier-formatted, and a
+  reformat buries real changes in the diff.
+- `kenya_phone()` (SQL, migration 0008) and `kenyanMobile()` (TS) must stay identical;
+  a database test compares them.
 - BDO and Agent test users need a `weekly_targets` row for the current week,
   or every page redirects them to `/targets`.
 - The README is the professional, client-facing document. It deliberately

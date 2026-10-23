@@ -12,6 +12,7 @@ import {
   Trophy,
   Target,
   UserCog,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react";
 
@@ -32,5 +33,6 @@ export const NAV: Item[] = [
   { href: "/reports", label: "Reports", icon: BarChart3, roles: ["BDO", "TEAM_LEADER", "ADMIN"] },
   { href: "/users", label: "People", icon: UserCog, roles: ["BDO", "TEAM_LEADER", "ADMIN"] },
   { href: "/teams", label: "Teams", icon: Network, roles: ["ADMIN"] },
+  { href: "/audit", label: "Audit log", icon: ScrollText, roles: ["ADMIN"] },
 ];
 

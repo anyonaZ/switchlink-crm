@@ -140,7 +140,20 @@ export default function ImportForm({ people }: { people: { id: string; name: str
           <p className="flex items-center gap-1.5 font-medium text-green-800">
             <CheckCircle2 size={18} /> {done.added} added: {done.merchants} merchant{done.merchants === 1 ? "" : "s"}, {done.individuals} individual{done.individuals === 1 ? "" : "s"}.
           </p>
-          {!!done.skipped?.length && <p className="mt-1 text-amber-800">{done.skipped.length} skipped because they were added by someone else meanwhile.</p>}
+          {!!done.skipped?.length && (
+            <div className="mt-2 text-amber-900">
+              <p>
+                {done.skipped.length} row{done.skipped.length === 1 ? " was" : "s were"} skipped because things changed since the file was checked:
+              </p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs">
+                {done.skipped.map((s) => (
+                  <li key={s.row}>
+                    Row {s.row} · {s.name}: {s.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <Link href="/accounts" className="btn-secondary mt-3 w-full">
             View accounts
           </Link>

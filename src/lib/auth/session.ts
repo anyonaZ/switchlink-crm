@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { and, eq, lt, or } from "drizzle-orm";
+import { and, eq, lt, or, ne } from "drizzle-orm";
 import { db, t } from "@/lib/db";
 import { IDLE_TIMEOUT_MS, SECURE_COOKIES, SESSION_MAX_AGE_MS } from "@/lib/config";
 import { randomToken, sha256Hex } from "@/lib/crypto";
@@ -90,15 +90,15 @@ export async function destroyCurrentSession() {
 }
 
 /** Signs someone out everywhere, e.g. on deactivation or password reset. */
-export async function destroyUserSessions(userId: string, exceptCurrent = false) {
+/** Signs a person out everywhere (or everywhere but this browser). Pass `tx` to make it part of a larger change. */
+export async function destroyUserSessions(userId: string, exceptCurrent = false, tx: Pick<typeof db, "delete"> = db) {
   if (!exceptCurrent) {
-    await db.delete(t.sessions).where(eq(t.sessions.userId, userId));
+    await tx.delete(t.sessions).where(eq(t.sessions.userId, userId));
     return;
   }
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   const keep = token ? sha256Hex(token) : "";
-  const all = await db.select({ id: t.sessions.id }).from(t.sessions).where(eq(t.sessions.userId, userId));
-  for (const s of all) if (s.id !== keep) await db.delete(t.sessions).where(and(eq(t.sessions.id, s.id)));
+  await tx.delete(t.sessions).where(and(eq(t.sessions.userId, userId), ne(t.sessions.id, keep)));
 }
 
 /** Whether this BDO or Agent has set this week's targets (memoised per request). */

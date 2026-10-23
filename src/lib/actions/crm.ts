@@ -133,6 +133,21 @@ export async function updateOpportunity(opportunityId: string, _prev: ActionResu
 }
 
 // --- Activities ----------------------------------------------------------------
+/**
+ * The opportunity an activity is about, if any: it must be one of this account's
+ * (the database enforces this too, with a foreign key on account + opportunity).
+ */
+async function opportunityOn(accountId: string, f: FormData): Promise<{ ok: true; id: string | null } | { ok: false }> {
+  const id = str(f, "opportunity_id");
+  if (!id) return { ok: true, id: null };
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return { ok: false };
+  const [opp] = await db
+    .select({ id: t.opportunities.id })
+    .from(t.opportunities)
+    .where(and(eq(t.opportunities.id, id), eq(t.opportunities.accountId, accountId)));
+  return opp ? { ok: true, id: opp.id } : { ok: false };
+}
+
 export async function logActivity(accountId: string, _prev: ActionResult | null, f: FormData): Promise<ActionResult> {
   const { me, acc } = await editableAccount(accountId);
   if (!acc) return fail("You can't log activity on this account.");
@@ -140,10 +155,12 @@ export async function logActivity(accountId: string, _prev: ActionResult | null,
   if (!(ACTIVITY_TYPES as readonly string[]).includes(type)) return fail("Choose an activity type.");
   const description = str(f, "description");
   if (!description) return fail("Say what happened.", { description: "Required" });
+  const opp = await opportunityOn(accountId, f);
+  if (!opp.ok) return fail("That opportunity isn't on this account. Reload the page and try again.", { opportunity_id: "Not on this account" });
   const now = new Date();
   await db.insert(t.activities).values({
     accountId,
-    opportunityId: str(f, "opportunity_id"),
+    opportunityId: opp.id,
     type: type as (typeof ACTIVITY_TYPES)[number],
     description,
     status: "COMPLETED",
@@ -163,9 +180,11 @@ export async function scheduleFollowUp(accountId: string, _prev: ActionResult | 
   if (!(ACTIVITY_TYPES as readonly string[]).includes(type)) return fail("Choose an activity type.");
   const when = nairobiToInstant(String(f.get("date") ?? ""), String(f.get("time") || "09:00"));
   if (!when) return fail("Pick a date for the follow-up.", { date: "Required" });
+  const opp = await opportunityOn(accountId, f);
+  if (!opp.ok) return fail("That opportunity isn't on this account. Reload the page and try again.", { opportunity_id: "Not on this account" });
   await db.insert(t.activities).values({
     accountId,
-    opportunityId: str(f, "opportunity_id"),
+    opportunityId: opp.id,
     type: type as (typeof ACTIVITY_TYPES)[number],
     description: str(f, "description"),
     status: "SCHEDULED",

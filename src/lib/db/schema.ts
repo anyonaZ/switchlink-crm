@@ -138,6 +138,13 @@ export const accounts = pgTable(
     name: text("name").notNull(),
     industry: text("industry"),
     phone: text("phone"),
+    /** +2547XXXXXXXX for Kenyan mobiles, else null. Computed by the database (kenya_phone()). */
+    phoneCanonical: text("phone_canonical").generatedAlwaysAs(sql`kenya_phone(phone)`),
+    /**
+     * Set by migration 0008 on individuals that already shared a phone with an older
+     * account, so the uniqueness rule could be added. An Admin resolves these.
+     */
+    phoneConflict: boolean("phone_conflict").notNull().default(false),
     email: text("email"),
     /** Free-text location the agent typed; the captured address lives in location_captures. */
     locationText: text("location_text"),
@@ -164,6 +171,10 @@ export const accounts = pgTable(
     index("accounts_kind_idx").on(t.kind),
     uniqueIndex("accounts_pesi_no_idx").on(t.pesiAccountNo),
     uniqueIndex("accounts_statement_no_idx").on(t.statementAccountNo),
+    /** One individual per mobile number (same number in any format). */
+    uniqueIndex("accounts_individual_phone_idx")
+      .on(t.phoneCanonical)
+      .where(sql`kind = 'INDIVIDUAL' and phone_canonical is not null and not phone_conflict`),
   ]
 );
 
@@ -212,6 +223,8 @@ export const kycDocuments = pgTable(
     originalName: text("original_name").notNull(),
     mimeType: text("mime_type").notNull(),
     sizeBytes: integer("size_bytes").notNull(),
+    /** SHA-256 of the stored file, checked on every download (null for files saved before 0008). */
+    sha256: varchar("sha256", { length: 64 }),
     uploadedBy: uuid("uploaded_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
@@ -285,6 +298,7 @@ export const activities = pgTable(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
+    /** Must be an opportunity on the same account (composite foreign key, migration 0008). */
     opportunityId: uuid("opportunity_id").references(() => opportunities.id, { onDelete: "set null" }),
     type: activityType("type").notNull(),
     description: text("description"),
@@ -611,3 +625,19 @@ export const accountDeletions = pgTable(
 );
 
 export type WeeklyTarget = typeof weeklyTargets.$inferSelect;
+
+/** Sign-in attempts per key ("ue:<ip>|<email>" or "ip:<ip>") in the current window. */
+export const loginThrottle = pgTable("login_throttle", {
+  key: text("key").primaryKey(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull().defaultNow(),
+  count: integer("count").notNull().default(0),
+});
+
+/** One row per money-form submission, so a retried request isn't recorded twice (src/lib/idempotency.ts). */
+export const idempotencyKeys = pgTable("idempotency_keys", {
+  key: uuid("key").primaryKey(),
+  actorId: uuid("actor_id").references(() => users.id, { onDelete: "cascade" }),
+  action: text("action").notNull(),
+  result: jsonb("result"),
+  createdAt: createdAt(),
+});

@@ -3,13 +3,15 @@
  * app shows Nairobi time no matter where the server's clock is set.
  * Safe to import from client and server components.
  */
-export const TZ = process.env.NEXT_PUBLIC_APP_TIMEZONE || "Africa/Nairobi";
+import { BUSINESS_TZ } from "@/lib/timezone";
+export const TZ = BUSINESS_TZ;
 
 const dtf = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-GB", { timeZone: TZ, ...opts });
 const fmtDateTime = dtf({ day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const fmtDateTimeYear = dtf({ day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 const fmtDate = dtf({ day: "numeric", month: "short", year: "numeric" });
 const fmtShortDate = dtf({ day: "numeric", month: "short" });
+const fmtMonth = dtf({ month: "long", year: "numeric" });
 
 type D = Date | string | null | undefined;
 const toDate = (v: D) => (v == null ? null : v instanceof Date ? v : new Date(v.length === 10 ? `${v}T12:00:00Z` : v));
@@ -21,6 +23,11 @@ export const formatDateTime = (v: D, withYear = false) => {
 export const formatDate = (v: D) => {
   const d = toDate(v);
   return d ? fmtDate.format(d) : "—";
+};
+/** e.g. "October 2026" (Nairobi calendar). */
+export const formatMonth = (v: D) => {
+  const d = toDate(v);
+  return d ? fmtMonth.format(d) : "—";
 };
 export const formatShortDate = (v: D) => {
   const d = toDate(v);

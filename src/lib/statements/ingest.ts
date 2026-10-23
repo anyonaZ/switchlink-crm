@@ -2,9 +2,9 @@ import "server-only";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { and, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db, t } from "@/lib/db";
-import { analyzeStatement, type Analysis, type ParsedStatement } from "./analyze";
+import { analyzeStatement, limitWarnings, type Analysis, type ParsedStatement } from "./analyze";
 import { bdoFor } from "@/lib/permissions";
 import { audit } from "@/lib/audit";
 
@@ -98,19 +98,13 @@ export async function ingestStatement(opts: {
   const warnings = [...analysis.warnings];
   if (!owner) warnings.push("This account has no assigned agent, so new draws were recorded without credit to anyone.");
 
-  // QF limit checks.
-  const [limit] = await db
-    .select()
+  // QF limit checks, against the limit in force on each line's date (not today's limit).
+  const limits = await db
+    .select({ amount: t.qfLimits.amount, effectiveFrom: t.qfLimits.effectiveFrom })
     .from(t.qfLimits)
-    .where(and(eq(t.qfLimits.accountId, accountId), lte(t.qfLimits.effectiveFrom, new Date())))
-    .orderBy(desc(t.qfLimits.effectiveFrom))
-    .limit(1);
-  if (!limit) warnings.push("No QF limit is recorded for this account, so cycles can't be worked out yet.");
-  else if (analysis.totals.peakOd > Number(limit.amount) * 1.02) {
-    warnings.push(
-      `The overdraft reached KES ${analysis.totals.peakOd.toLocaleString("en-KE")}, above the recorded limit of KES ${Number(limit.amount).toLocaleString("en-KE")}. Check the limit.`
-    );
-  }
+    .where(eq(t.qfLimits.accountId, accountId))
+    .orderBy(asc(t.qfLimits.effectiveFrom));
+  warnings.push(...limitWarnings(analysis.lines, limits.map((l) => ({ amount: Number(l.amount), from: l.effectiveFrom }))));
 
   return db.transaction(async (tx) => {
     const [up] = await tx

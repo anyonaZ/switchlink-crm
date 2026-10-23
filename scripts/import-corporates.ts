@@ -1,9 +1,13 @@
 /**
  * Loads a list of corporate leads into the CRM.
  *
- *   npm run import:corporates
- *   npm run import:corporates -- --owner "Sharon Achola" --leader "Lindsey Erodanga" --file data/corporates-lindsey-sharon.json
- *   npm run import:corporates -- --dry-run      (shows what would happen, saves nothing)
+ *   npm run import:corporates -- --file /path/to/leads.json
+ *   npm run import:corporates -- --file /path/to/leads.json --owner "Sharon Achola" --leader "Lindsey Erodanga"
+ *   npm run import:corporates -- --file /path/to/leads.json --dry-run   (shows what would happen, saves nothing)
+ *
+ * The lead list is client data: it is not kept in the repository or the Docker
+ * image. Keep it on the server (e.g. in /opt/switchlink-private/) and pass its path;
+ * see README → Importing a lead list.
  *
  * --owner and --leader take a full name or an email. Both people must already
  * exist (add them from People first): the owner as a BDO, the leader as a Team
@@ -38,7 +42,11 @@ const opt = (name: string, fallback: string) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 const dryRun = args.includes("--dry-run");
-const file = opt("file", "data/corporates-lindsey-sharon.json");
+const file = opt("file", "");
+if (!file) {
+  console.error('Pass the lead list with --file, e.g. npm run import:corporates -- --file /opt/switchlink-private/corporates.json');
+  process.exit(1);
+}
 const ownerKey = opt("owner", "Sharon Achola");
 const leaderKey = opt("leader", "Lindsey Erodanga");
 const rows = JSON.parse(readFileSync(file, "utf8")) as Row[];

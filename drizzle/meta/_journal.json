@@ -57,6 +57,13 @@
       "when": 1792716482825,
       "tag": "0007_ledger_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792718547582,
+      "tag": "0008_security_hardening",
+      "breakpoints": true
     }
   ]
 }

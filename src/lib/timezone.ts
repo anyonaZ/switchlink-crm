@@ -9,6 +9,13 @@
  * timezone the Node server process happens to be running in.
  */
 
+/**
+ * The business timezone. Fixed: Switchlink works in Kenya, and parts of the CRM
+ * rely on Nairobi's fixed UTC+3 offset (no daylight saving). Every module takes
+ * the timezone from here; there is deliberately no setting for it.
+ */
+export const BUSINESS_TZ = "Africa/Nairobi";
+
 export interface ZonedParts {
   year: number;
   month: number; // 1-12

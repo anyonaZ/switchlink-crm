@@ -3,20 +3,21 @@
 import { revalidatePath } from "next/cache";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, t } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { canAssignNewAccount, canBulkUpload, initialStatus } from "@/lib/permissions";
-import { STORAGE_DIR } from "@/lib/config";
+import { deletePreview, loadPreview, previewDir as DIR, savePreview, PREVIEW_TTL_MS } from "@/lib/import/previews";
+import { kenyanMobile } from "@/lib/phone";
+import { isUniqueViolation } from "@/lib/ledger";
 import { duplicateInFile, mapHeaders, nameKey, parseRow, phoneKey, type ImportKind, type ImportRow } from "@/lib/import/accounts";
 
 const run = promisify(execFile);
 const PARSER = path.join(process.cwd(), "tools", "parse_sheet.py");
 const MAX_BYTES = 10 * 1024 * 1024;
-const DIR = path.join(STORAGE_DIR, "imports");
 
 export interface PreviewResult {
   ok: boolean;
@@ -54,9 +55,9 @@ export async function previewImport(f: FormData): Promise<PreviewResult> {
   // Default owner for rows without an "Assign to" value.
   const defaultOwnerId = String(f.get("owner_id") ?? "") || me.id;
 
-  await mkdir(DIR, { recursive: true });
+  await mkdir(DIR, { recursive: true, mode: 0o700 });
   const tmp = path.join(DIR, `${randomUUID()}.${ext}`);
-  await writeFile(tmp, Buffer.from(await file.arrayBuffer()));
+  await writeFile(tmp, Buffer.from(await file.arrayBuffer()), { mode: 0o600 });
   let parsed: { ok: boolean; error?: string; headers?: string[]; rows?: { row: number; values: string[] }[] };
   try {
     const { stdout } = await run(process.env.PYTHON_BIN || "python3", ["-I", PARSER, tmp], { timeout: 60_000, maxBuffer: 50 * 1024 * 1024 });
@@ -126,7 +127,7 @@ export async function previewImport(f: FormData): Promise<PreviewResult> {
 
   const token = randomUUID();
   const pending: Pending = { by: me.id, fileName: file.name.slice(0, 200), createdAt: new Date().toISOString(), rows: ready };
-  await writeFile(path.join(DIR, `${token}.json`), JSON.stringify(pending));
+  await savePreview(token, pending);
   const nameOf = new Map(people.map((p) => [p.id, p.name]));
   return {
     ok: true,
@@ -143,17 +144,49 @@ export async function previewImport(f: FormData): Promise<PreviewResult> {
 export async function commitImport(token: string): Promise<CommitResult> {
   const me = await requireUser();
   if (!canBulkUpload(me)) return { ok: false, error: "Only Admins, Team Leaders and BDOs can upload accounts in bulk." };
-  if (!/^[0-9a-f-]{36}$/i.test(token)) return { ok: false, error: "That upload has expired. Upload the file again." };
-  const file = path.join(DIR, `${token}.json`);
-  const pending = JSON.parse(await readFile(file, "utf8").catch(() => "null")) as Pending | null;
-  if (!pending || pending.by !== me.id) return { ok: false, error: "That upload has expired. Upload the file again." };
+  const loaded = await loadPreview<Pending>(token, me.id);
+  if (!loaded.ok)
+    return {
+      ok: false,
+      error: loaded.reason === "expired" ? `That check is more than ${PREVIEW_TTL_MS / 60000} minutes old. Upload the file again.` : "That upload has expired. Upload the file again.",
+    };
+  const pending = loaded.data;
+
+  // The people the rows are assigned to, as they are now (not as they were at the preview).
+  const ownerIds = [...new Set(pending.rows.map((r) => r.ownerId))];
+  const owners = new Map(
+    (ownerIds.length
+      ? await db
+          .select({ id: t.users.id, name: t.users.name, role: t.users.role, teamId: t.users.teamId, reportsTo: t.users.reportsTo, status: t.users.status })
+          .from(t.users)
+          .where(inArray(t.users.id, ownerIds))
+      : []
+    ).map((u) => [u.id, u])
+  );
 
   const skipped: CommitResult["skipped"] = [];
   let merchants = 0,
     individuals = 0;
   await db.transaction(async (tx) => {
     for (const r of pending.rows) {
-      // Re-check, in case someone added the same account since the preview.
+      // Re-check everything, in case people or accounts changed since the preview.
+      const owner = owners.get(r.ownerId);
+      if (!owner || owner.status !== "ACTIVE") {
+        skipped.push({ row: r.row, name: r.name, reason: `${owner?.name ?? "The person it was assigned to"} is no longer active` });
+        continue;
+      }
+      if (!canAssignNewAccount(me, owner)) {
+        skipped.push({ row: r.row, name: r.name, reason: `You can no longer assign accounts to ${owner.name}` });
+        continue;
+      }
+      const e164 = r.kind === "INDIVIDUAL" ? (kenyanMobile(r.phone)?.e164 ?? null) : null;
+      if (e164) {
+        const [hit] = await tx.select({ id: t.accounts.id }).from(t.accounts).where(and(eq(t.accounts.kind, "INDIVIDUAL"), eq(t.accounts.phoneCanonical, e164)));
+        if (hit) {
+          skipped.push({ row: r.row, name: r.name, reason: "An individual with this phone number was added meanwhile" });
+          continue;
+        }
+      }
       if (r.pesi) {
         const [hit] = await tx.select({ id: t.accounts.id }).from(t.accounts).where(eq(t.accounts.pesiAccountNo, r.pesi));
         if (hit) {
@@ -171,6 +204,10 @@ export async function commitImport(token: string): Promise<CommitResult> {
       }
       const status = initialStatus(me, r.kind);
       const now = new Date();
+      // Each row in its own savepoint: if the database's uniqueness rules catch a clash the
+      // checks above missed (someone saving at this very moment), only that row is skipped.
+      try {
+        await tx.transaction(async (tx) => {
       const [acc] = await tx
         .insert(t.accounts)
         .values({
@@ -180,8 +217,8 @@ export async function commitImport(token: string): Promise<CommitResult> {
           email: r.email,
           locationText: r.location,
           pesiAccountNo: r.pesi,
-          ownerId: r.ownerId,
-          teamId: r.teamId,
+          ownerId: owner.id,
+          teamId: owner.teamId,
           status,
           createdBy: me.id,
           ...(status === "ACTIVE" ? { verifiedAt: now, verifiedBy: me.id } : {}),
@@ -190,10 +227,8 @@ export async function commitImport(token: string): Promise<CommitResult> {
         .returning({ id: t.accounts.id });
       if (r.kind === "MERCHANT") {
         await tx.insert(t.merchantProfiles).values({ accountId: acc.id, businessType: r.businessType, ownerName: r.ownerName, kraPin: r.kraPin, registrationNo: r.registrationNo });
-        merchants++;
       } else {
         await tx.insert(t.individualProfiles).values({ accountId: acc.id });
-        individuals++;
       }
       await tx.insert(t.accountStatusHistory).values({ accountId: acc.id, toStatus: status, changedBy: me.id, note: `Uploaded from ${pending.fileName}` });
       const [opp] = await tx.insert(t.opportunities).values({ accountId: acc.id, product: "QUICK_FINANCE", ownerId: r.ownerId, stage: "NEW" }).returning({ id: t.opportunities.id });
@@ -201,9 +236,16 @@ export async function commitImport(token: string): Promise<CommitResult> {
       if (r.ownerName && r.kind === "MERCHANT") await tx.insert(t.contacts).values({ accountId: acc.id, name: r.ownerName, jobTitle: "Owner", phone: r.phone, email: r.email, isDecisionMaker: true });
       if (r.warnings.length) await tx.insert(t.comments).values({ accountId: acc.id, authorId: me.id, body: r.warnings.join("\n") });
       await tx.insert(t.auditLog).values({ actorId: me.id, action: "account.import", entity: "account", entityId: acc.id, detail: { file: pending.fileName, row: r.row } });
+        });
+        if (r.kind === "MERCHANT") merchants++;
+        else individuals++;
+      } catch (e) {
+        if (!isUniqueViolation(e)) throw e;
+        skipped.push({ row: r.row, name: r.name, reason: "Added by someone else at the same moment" });
+      }
     }
   });
-  await unlink(file).catch(() => undefined);
+  await deletePreview(token);
   revalidatePath("/accounts");
   revalidatePath("/dashboard");
   return { ok: true, added: merchants + individuals, merchants, individuals, skipped };

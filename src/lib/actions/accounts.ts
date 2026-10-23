@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { db, t } from "@/lib/db";
+import { kenyanMobile } from "@/lib/phone";
 import { requireUser } from "@/lib/auth/session";
 import { findAccountFor, loadPerson } from "@/lib/access";
 import { canAssignNewAccount, canEditAccount, canReassignAccount, canSkipLocation, canVerifyAccount, effectiveStatus, initialStatus, statusChangeProblem, type AccountKind, type AccountStatus } from "@/lib/permissions";
@@ -41,8 +42,13 @@ function validateCommon(f: FormData, kind: AccountKind) {
   const errors: Record<string, string> = {};
   const name = str(f, "name");
   if (!name) errors.name = kind === "INDIVIDUAL" ? "Enter the client's full name." : "Enter the business or organisation name.";
-  const phone = str(f, "phone");
-  if (phone && !PHONE_RE.test(phone)) errors.phone = "Check the phone number.";
+  // Kenyan mobiles are stored in one form (07…/01…), so the same number written
+  // differently is recognised as the same. Individuals must have one; other
+  // accounts may also give a landline or foreign number.
+  let phone = str(f, "phone");
+  const mobile = kenyanMobile(phone);
+  if (mobile) phone = mobile.local;
+  else if (phone && (kind === "INDIVIDUAL" || !PHONE_RE.test(phone))) errors.phone = "Enter a Kenyan mobile number, e.g. 0712 345 678.";
   if (kind === "INDIVIDUAL" && !phone) errors.phone = "Individuals need a phone number.";
   const email = str(f, "email");
   if (email && !EMAIL_RE.test(email)) errors.email = "Check the email address.";
@@ -70,20 +76,42 @@ function validateCommon(f: FormData, kind: AccountKind) {
   };
 }
 
+/** Turns a database uniqueness clash (two people saving at the same moment) into a form error. */
+function uniqueClash(e: unknown): ActionResult | null {
+  const err = e as { code?: string; constraint_name?: string; cause?: { code?: string; constraint_name?: string } };
+  const c = err?.cause ?? err;
+  if (c?.code !== "23505") return null;
+  if (c.constraint_name === "accounts_individual_phone_idx") return fail("That number is already in use.", { phone: "This number is already registered to another individual." });
+  if (c.constraint_name === "accounts_pesi_no_idx") return fail("That number is already in use.", { pesi_account_no: "Another account already has this Pesi account number." });
+  if (c.constraint_name === "accounts_statement_no_idx")
+    return fail("That number is already in use.", { statement_account_no: "Another account already uses this statement account number." });
+  return null;
+}
+
+/** Runs a save; a uniqueness clash comes back as a form error instead of a crash. */
+async function guardUnique<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; result: ActionResult }> {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (e) {
+    const clash = uniqueClash(e);
+    if (clash) return { ok: false, result: clash };
+    throw e;
+  }
+}
+
 async function uniqueProblem(pesi: string | null, stmtNo: string | null, exceptId?: string, individualPhone?: string | null): Promise<Record<string, string> | null> {
   if (individualPhone) {
     // Same number written differently (0712…, +254712…, spaces) counts as the same person.
-    const digits = individualPhone.replace(/\D/g, "").replace(/^(254|0)/, "");
-    const [hit] = await db
-      .select({ id: t.accounts.id, name: t.accounts.name })
-      .from(t.accounts)
-      .where(
-        and(
-          eq(t.accounts.kind, "INDIVIDUAL"),
-          sql`regexp_replace(regexp_replace(coalesce(${t.accounts.phone}, ''), '[^0-9]', '', 'g'), '^(254|0)', '') = ${digits}`,
-          exceptId ? ne(t.accounts.id, exceptId) : sql`true`
-        )
-      );
+    // The database enforces this too (unique index on phone_canonical); this check gives a friendly message.
+    const e164 = kenyanMobile(individualPhone)?.e164 ?? null;
+    const [hit] = e164
+      ? await db
+          .select({ id: t.accounts.id, name: t.accounts.name })
+          .from(t.accounts)
+          .where(
+            and(eq(t.accounts.kind, "INDIVIDUAL"), eq(t.accounts.phoneCanonical, e164), eq(t.accounts.phoneConflict, false), exceptId ? ne(t.accounts.id, exceptId) : sql`true`)
+          )
+      : [];
     if (hit) return { phone: `This number is already registered to ${hit.name}.` };
   }
   if (pesi) {
@@ -134,7 +162,7 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
 
   const status = initialStatus(me, kind);
   const pending = status === "PENDING_VERIFICATION";
-  const { accountId, captureId } = await db.transaction(async (tx) => {
+  const saved = await guardUnique(() => db.transaction(async (tx) => {
     const [acc] = await tx
       .insert(t.accounts)
       .values({
@@ -178,7 +206,9 @@ export async function createAccount(_prev: ActionResult | null, f: FormData): Pr
     }
     await tx.insert(t.auditLog).values({ actorId: me.id, action: "account.create", entity: "account", entityId: acc.id, detail: { kind, location: Boolean(cap) } });
     return { accountId: acc.id, captureId: cap?.id ?? null };
-  });
+  }));
+  if (!saved.ok) return saved.result;
+  const { accountId, captureId } = saved.value;
 
   // Look up the street name in the background; the agent never waits for it.
   // (Not `after()`: on this setup it held the response until the lookup finished.)
@@ -201,8 +231,10 @@ export async function updateAccount(id: string, _prev: ActionResult | null, f: F
   const dup = await uniqueProblem(v.values.pesiAccountNo, v.values.statementAccountNo, id, acc.kind === "INDIVIDUAL" ? v.values.phone : null);
   if (dup) return fail("That number is already in use.", dup);
 
-  await db.transaction(async (tx) => {
-    await tx.update(t.accounts).set(v.values).where(eq(t.accounts.id, id));
+  const saved = await guardUnique(() => db.transaction(async (tx) => {
+    // Saving an individual clears a "shares a phone" flag from migration 0008: the number
+    // has passed the uniqueness check above, and the database rule applies again.
+    await tx.update(t.accounts).set({ ...v.values, ...(acc.kind === "INDIVIDUAL" ? { phoneConflict: false } : {}) }).where(eq(t.accounts.id, id));
     if (acc.kind === "MERCHANT") {
       await tx.insert(t.merchantProfiles).values({ accountId: id, ...v.merchant }).onConflictDoUpdate({ target: t.merchantProfiles.accountId, set: v.merchant });
     }
@@ -211,7 +243,8 @@ export async function updateAccount(id: string, _prev: ActionResult | null, f: F
       await tx.insert(t.individualProfiles).values({ accountId: id, ...set }).onConflictDoUpdate({ target: t.individualProfiles.accountId, set });
     }
     await tx.insert(t.auditLog).values({ actorId: me.id, action: "account.update", entity: "account", entityId: id, detail: { kind: acc.kind } });
-  });
+  }));
+  if (!saved.ok) return saved.result;
   revalidatePath(`/accounts/${id}`);
   revalidatePath("/accounts");
   return ok("Saved.");
@@ -245,8 +278,8 @@ export async function changeAccountStatus(id: string, _prev: ActionResult | null
       changedBy: me.id,
       note: pending ? ["Sent to an Admin for verification", note].filter(Boolean).join(" · ") : note,
     });
+    await audit(me.id, pending ? "account.verification_request" : "account.status", "account", id, { from: acc.status, to }, tx);
   });
-  await audit(me.id, pending ? "account.verification_request" : "account.status", "account", id, { from: acc.status, to });
   revalidatePath(`/accounts/${id}`);
   revalidatePath("/accounts");
   revalidatePath("/dashboard");
@@ -268,10 +301,10 @@ export async function verifyAccount(id: string): Promise<ActionResult> {
       .returning({ id: t.accounts.id });
     if (!updated.length) return false;
     await tx.insert(t.accountStatusHistory).values({ accountId: id, fromStatus: "PENDING_VERIFICATION", toStatus: "ACTIVE", changedBy: me.id, note: "Verified by Admin" });
+    await audit(me.id, "account.verify", "account", id, undefined, tx);
     return true;
   });
   if (!done) return fail("This account isn't waiting for verification.");
-  await audit(me.id, "account.verify", "account", id);
   revalidatePath(`/accounts/${id}`);
   revalidatePath("/accounts");
   revalidatePath("/dashboard");
@@ -302,8 +335,8 @@ export async function declineVerification(id: string, reason = ""): Promise<Acti
       completedBy: me.id,
       createdBy: me.id,
     });
+    await audit(me.id, "account.verification_decline", "account", id, { reason: why, backTo: back }, tx);
   });
-  await audit(me.id, "account.verification_decline", "account", id, { reason: why, backTo: back });
   revalidatePath(`/accounts/${id}`);
   revalidatePath("/accounts");
   revalidatePath("/dashboard");
@@ -323,8 +356,8 @@ export async function reassignAccount(id: string, _prev: ActionResult | null, f:
     await tx.update(t.accounts).set({ ownerId: newOwner?.id ?? null, teamId: moveTeam }).where(eq(t.accounts.id, id));
     // Open pipeline items follow the account to its new owner.
     await tx.update(t.opportunities).set({ ownerId: newOwner?.id ?? null }).where(and(eq(t.opportunities.accountId, id), ne(t.opportunities.stage, "ACTIVE")));
+    await audit(me.id, "account.reassign", "account", id, { from: acc.ownerId, to: newOwner?.id ?? null }, tx);
   });
-  await audit(me.id, "account.reassign", "account", id, { from: acc.ownerId, to: newOwner?.id ?? null });
   revalidatePath(`/accounts/${id}`);
   revalidatePath("/accounts");
   return ok(newOwner ? `Reassigned to ${newOwner.name}.` : "Account unassigned.");

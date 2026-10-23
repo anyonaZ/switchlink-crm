@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { eq, sql } from "drizzle-orm";
 import { db, t } from "@/lib/db";
-import { requireRole, destroyUserSessions } from "@/lib/auth/session";
+import { requireRole } from "@/lib/auth/session";
 import { hashPassword, passwordProblem } from "@/lib/auth/password";
 import { loadPerson } from "@/lib/access";
 import { followTeam, moveAgentWithAccounts } from "@/lib/people-data";
@@ -104,11 +104,15 @@ export async function createUser(_prev: ActionResult | null, f: FormData): Promi
   if (taken) return fail("Someone already uses that email.", { email: "Already in use" });
   if ("error" in line) return fail("Some details need fixing.");
 
-  const [u] = await db
-    .insert(t.users)
-    .values({ name: name!, email: email!, passwordHash: await hashPassword(password), role, teamId: line.teamId, reportsTo: line.reportsTo, mustChangePassword: true })
-    .returning({ id: t.users.id });
-  await audit(me.id, "user.create", "user", u.id, { role, teamId: line.teamId, reportsTo: line.reportsTo });
+  const passwordHash = await hashPassword(password);
+  const u = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(t.users)
+      .values({ name: name!, email: email!, passwordHash, role, teamId: line.teamId, reportsTo: line.reportsTo, mustChangePassword: true })
+      .returning({ id: t.users.id });
+    await audit(me.id, "user.create", "user", row.id, { role, teamId: line.teamId, reportsTo: line.reportsTo }, tx);
+    return row;
+  });
   touch();
   return signInDetails(`${name} added`, name!, email!, password, u.id);
 }
@@ -118,12 +122,13 @@ export async function resetPassword(userId: string): Promise<ActionResult> {
   const target = await loadPerson(userId);
   if (!target || !canResetPassword(me, target)) return fail("You can't reset this person's password.");
   const password = tempPassword();
-  await db
-    .update(t.users)
-    .set({ passwordHash: await hashPassword(password), mustChangePassword: true, failedLogins: 0, lockedUntil: null })
-    .where(eq(t.users.id, userId));
-  await destroyUserSessions(userId);
-  await audit(me.id, "user.reset_password", "user", userId);
+  const passwordHash = await hashPassword(password);
+  // New password, everyone signed out, and the audit entry: all or nothing.
+  await db.transaction(async (tx) => {
+    await tx.update(t.users).set({ passwordHash, mustChangePassword: true, failedLogins: 0, lockedUntil: null }).where(eq(t.users.id, userId));
+    await tx.delete(t.sessions).where(eq(t.sessions.userId, userId));
+    await audit(me.id, "user.reset_password", "user", userId, undefined, tx);
+  });
   const [{ email }] = await db.select({ email: t.users.email }).from(t.users).where(eq(t.users.id, userId));
   return signInDetails(`New password for ${target.name}`, target.name, email, password);
 }
@@ -136,8 +141,9 @@ export async function moveAgent(agentId: string, _prev: ActionResult | null, f: 
   const line = await resolveLine("AGENT", str(f, "reports_to"), null);
   if ("error" in line) return fail(line.error!);
   if (me.role === "TEAM_LEADER" && line.teamId !== me.teamId) return fail("Choose a BDO on your team.");
-  const moved = await moveAgentWithAccounts(agentId, line);
-  await audit(me.id, "user.move_agent", "user", agentId, { reportsTo: line.reportsTo, fromTeam: agent.teamId, toTeam: line.teamId, accountsMoved: moved });
+  const moved = await moveAgentWithAccounts(agentId, line, (tx, accountsMoved) =>
+    audit(me.id, "user.move_agent", "user", agentId, { reportsTo: line.reportsTo, fromTeam: agent.teamId, toTeam: line.teamId, accountsMoved }, tx)
+  );
   touch();
   revalidatePath("/accounts");
   return ok(moved ? `${agent.name} moved, with their ${moved} account${moved === 1 ? "" : "s"}.` : `${agent.name} moved.`);
@@ -147,9 +153,11 @@ export async function setUserStatus(userId: string, status: "ACTIVE" | "INACTIVE
   const me = await requireRole(["ADMIN", "TEAM_LEADER", "BDO"]);
   const target = await loadPerson(userId);
   if (!target || !canManageUser(me, target)) return fail("You can't change this person.");
-  await db.update(t.users).set({ status }).where(eq(t.users.id, userId));
-  if (status === "INACTIVE") await destroyUserSessions(userId);
-  await audit(me.id, status === "INACTIVE" ? "user.deactivate" : "user.reactivate", "user", userId);
+  await db.transaction(async (tx) => {
+    await tx.update(t.users).set({ status }).where(eq(t.users.id, userId));
+    if (status === "INACTIVE") await tx.delete(t.sessions).where(eq(t.sessions.userId, userId));
+    await audit(me.id, status === "INACTIVE" ? "user.deactivate" : "user.reactivate", "user", userId, undefined, tx);
+  });
   touch();
   return ok(status === "INACTIVE" ? `${target.name} deactivated and signed out. Their accounts and history stay as they are.` : `${target.name} reactivated.`);
 }
@@ -173,10 +181,12 @@ export async function updateUser(userId: string, _prev: ActionResult | null, f: 
   // old and new Team Leaders never see a split set. See followTeam().
   const accountsMoved = await db.transaction(async (tx) => {
     await tx.update(t.users).set({ role, teamId, reportsTo: line.reportsTo, name: str(f, "name") ?? target.name }).where(eq(t.users.id, userId));
-    return teamId !== target.teamId ? followTeam(tx, userId, teamId) : 0;
+    const moved = teamId !== target.teamId ? await followTeam(tx, userId, teamId) : 0;
+    // A new role takes effect at once: their sessions end.
+    if (role !== target.role) await tx.delete(t.sessions).where(eq(t.sessions.userId, userId));
+    await audit(me.id, "user.update", "user", userId, { role, teamId, fromTeam: target.teamId, accountsMoved: moved }, tx);
+    return moved;
   });
-  if (role !== target.role) await destroyUserSessions(userId);
-  await audit(me.id, "user.update", "user", userId, { role, teamId, fromTeam: target.teamId, accountsMoved });
   touch();
   revalidatePath("/accounts");
   return ok(accountsMoved ? `Saved. ${accountsMoved} account${accountsMoved === 1 ? "" : "s"} moved to the new team with them.` : "Saved.");
@@ -186,8 +196,10 @@ export async function createTeam(_prev: ActionResult | null, f: FormData): Promi
   const me = await requireRole(["ADMIN"]);
   const name = str(f, "name");
   if (!name) return fail("Name the team.", { name: "Required" });
-  const [team] = await db.insert(t.teams).values({ name }).returning({ id: t.teams.id });
-  await audit(me.id, "team.create", "team", team.id, { name });
+  await db.transaction(async (tx) => {
+    const [team] = await tx.insert(t.teams).values({ name }).returning({ id: t.teams.id });
+    await audit(me.id, "team.create", "team", team.id, { name }, tx);
+  });
   touch();
   return ok(`Team "${name}" created.`);
 }
@@ -196,8 +208,10 @@ export async function renameTeam(teamId: string, _prev: ActionResult | null, f: 
   const me = await requireRole(["ADMIN"]);
   const name = str(f, "name");
   if (!name) return fail("Name the team.", { name: "Required" });
-  await db.update(t.teams).set({ name }).where(eq(t.teams.id, teamId));
-  await audit(me.id, "team.rename", "team", teamId, { name });
+  await db.transaction(async (tx) => {
+    await tx.update(t.teams).set({ name }).where(eq(t.teams.id, teamId));
+    await audit(me.id, "team.rename", "team", teamId, { name }, tx);
+  });
   touch();
   return ok("Team renamed.");
 }

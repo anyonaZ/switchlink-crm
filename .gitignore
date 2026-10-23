@@ -11,3 +11,8 @@ storage/
 backups/
 *.log
 .DS_Store
+
+# Client data (lead lists, statements) never goes in the repository.
+data/
+*.xls
+rclone/

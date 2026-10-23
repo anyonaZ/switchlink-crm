@@ -161,3 +161,33 @@ export function analyzeStatement(s: ParsedStatement, priorDrawsBySerial: Map<str
     feeMismatch: { ...fee, extra: r2(fee.extra) },
   };
 }
+
+/**
+ * Overdraft-limit warnings for a statement, using the QF limit in force on each
+ * line's date (Nairobi). Limits are { amount, from } with `from` the instant the
+ * limit took effect. A 2% margin allows for charges posted on top of a full draw.
+ */
+export function limitWarnings(lines: Pick<Line, "date" | "odAfter">[], limits: { amount: number; from: Date }[]): string[] {
+  if (!lines.length) return [];
+  if (!limits.length) return ["No QF limit is recorded for this account, so cycles can't be worked out yet."];
+  const sorted = [...limits].sort((a, b) => a.from.getTime() - b.from.getTime());
+  const inForce = (date: string) => {
+    const end = Date.parse(`${date}T23:59:59+03:00`);
+    let found: { amount: number; from: Date } | null = null;
+    for (const l of sorted) if (l.from.getTime() <= end) found = l;
+    return found;
+  };
+  const out: string[] = [];
+  const noLimit = lines.filter((l) => l.odAfter > 0 && !inForce(l.date));
+  if (noLimit.length) out.push(`No QF limit was recorded yet on ${noLimit[0].date} (the account was overdrawn then), so cycles before the first limit can't be worked out.`);
+  let worst: { date: string; od: number; limit: number } | null = null;
+  for (const l of lines) {
+    const lim = inForce(l.date);
+    if (lim && l.odAfter > lim.amount * 1.02 && (!worst || l.odAfter - lim.amount > worst.od - worst.limit)) worst = { date: l.date, od: l.odAfter, limit: lim.amount };
+  }
+  if (worst)
+    out.push(
+      `On ${worst.date} the overdraft reached KES ${worst.od.toLocaleString("en-KE")}, above the limit in force that day of KES ${worst.limit.toLocaleString("en-KE")}. Check the limit.`
+    );
+  return out;
+}

@@ -31,9 +31,16 @@ export async function followTeam(tx: Tx, userId: string, teamId: string | null) 
 }
 
 /** Moves an Agent to another BDO (and that BDO's team), with their accounts, in one transaction. */
-export async function moveAgentWithAccounts(agentId: string, line: { reportsTo: string | null; teamId: string | null }) {
+export async function moveAgentWithAccounts(
+  agentId: string,
+  line: { reportsTo: string | null; teamId: string | null },
+  /** e.g. the audit entry, saved in the same transaction */
+  alsoInTx?: (tx: Tx, accountsMoved: number) => Promise<unknown>
+) {
   return db.transaction(async (tx) => {
     await tx.update(t.users).set({ reportsTo: line.reportsTo, teamId: line.teamId }).where(eq(t.users.id, agentId));
-    return followTeam(tx, agentId, line.teamId);
+    const moved = await followTeam(tx, agentId, line.teamId);
+    await alsoInTx?.(tx, moved);
+    return moved;
   });
 }

@@ -27,7 +27,7 @@ mobile phones in the field and is self-hosted on Switchlink's own server.
 - Weekly targets for BDOs and Agents, rolled up by BDO and team, with progress on every dashboard
 - Automatic removal of individual accounts not activated within 30 days
 - Bulk upload of merchant and individual accounts from Excel or CSV
-- Installable as an app on phones (PWA), with an offline notice
+- Installable as an app on phones (PWA). Work needs a connection: offline, the app shows a notice, and a half-filled new-account form is kept until the signal returns
 
 **Technology**
 
@@ -100,7 +100,7 @@ Any account can be marked Inactive.
 - **Verify:** the account becomes Active, with who verified it and when recorded.
 - **Decline:** the account returns to its previous status. The reason is shown in its history and activity feed, so the agent can fix it and resubmit.
 - **Admins** who set an account to Active, or who register an individual themselves, activate it directly.
-- **Duplicate phones:** a phone number can belong to only one individual account.
+- **Duplicate phones:** a phone number can belong to only one individual account. Numbers are recognised in any format (0712…, +254 712…, 712…) and stored as 07…/01…. Individuals need a Kenyan mobile number.
 
 ### Pesi statements and Quick Finance
 
@@ -112,6 +112,7 @@ Any account can be marked Inactive.
 - Each payment that takes the balance below zero is recorded as a QF draw for the amount below zero.
 - Charges and fees are never counted as draws.
 - A reversed payment cancels its draw, including when the reversal appears in a later statement than the payment. It is linked to that draw and never counted as a draw.
+- **Limit checks** compare the overdraft on each day with the QF limit in force that day.
 - Upload results list new draws and reversals separately. Only new lending that isn't reversed marks the Quick Finance opportunity Active.
 - An upload is saved completely (lines, draws and its audit entry) or not at all.
 
@@ -123,6 +124,7 @@ Any account can be marked Inactive.
 - **No edits:** ledger entries are never edited. A correction is recorded as a reversal entry.
 - **Credit is fixed on the day:** each entry records the credited person, their BDO and their team at the time. Later reassignments don't change historical figures.
 - **One reversal per entry:** enforced by the database, so a double tap or two Admins reversing at once can't reverse an entry twice.
+- **Which month a reversal counts in:** a reversal made by hand counts in the month of the entry it corrects (that month's figures are restated); a reversal on a Pesi statement counts on the date Pesi posted it. The ledger shows this on every reversal.
 - **Reversed entries don't count:** a reversed draw is excluded from draw counts and isn't an account's first disbursement.
 
 ### Shared corporates
@@ -225,11 +227,27 @@ The file's column headings are recognised in common wordings.
 
 ### Security
 
-- **Passwords:** hashed with Argon2id. Users must change their password at first sign-in.
-- **Lockout:** an account is locked for 15 minutes after 5 failed sign-in attempts.
-- **Sessions:** stored server-side. Users are signed out after 60 minutes of inactivity, or after 7 days at most.
+**Signing in**
+- **Passwords:** hashed with Argon2id; at least 10 characters with letters and digits. Users must change a temporary password at first sign-in, and until they do, every page and every API route is closed to them.
+- **Lockout and throttling:** an account is locked for 15 minutes after 5 wrong passwords. Attempts are also limited per email and network address (10 per 10 minutes) and per network address (100 per 10 minutes), counted in the database so the limits survive restarts. One person mistyping on shared office Wi-Fi doesn't block colleagues.
+- **Sessions:** stored server-side (only a hash of the cookie). Users are signed out after 60 minutes of inactivity, or after 7 days at most; deactivating someone, resetting their password or changing their role signs them out at once.
+
+**Access**
+- Every page, action and API route checks the signed-in user and their role on the server, and every list is limited to what that role may see (`src/lib/permissions.ts`). A test fails the build if an API route skips the shared check.
+- Team Leaders see accounts by team, so an account always sits on its owner's team, including after someone moves.
+
+**Data and files**
+- **KYC documents** are checked by their content (only real JPEG, PNG, WebP and PDF files; PDFs with scripts or attachments are refused), stored outside the web root under random names, readable only by the app, and fingerprinted (SHA-256). A file that changes on disk is never served. Downloads are sandboxed. Optional virus scanning with ClamAV (see Configuration).
+- **CSV exports** neutralise anything a spreadsheet would run as a formula.
+- **Money:** every ledger entry and its audit record are saved together; a reversal can only happen once (enforced by the database); the money forms can't save twice if a tap is repeated or a weak signal makes the phone resend.
+- **Duplicates:** one individual per mobile number, whatever format it's typed in, enforced by the database.
+- **Bulk-upload checks** are private to the uploader, expire after 30 minutes and are deleted when used; everything is checked again when the upload is confirmed.
 - **Unsaved forms:** a half-filled new-account form is kept only in the current browser tab, for the signed-in user, for up to 4 hours, and is wiped at sign-out. KRA PIN, registration number and date of birth are never kept.
-- **Audit log:** sensitive actions (sign-ins, money, status changes, verifications and approvals) are recorded in `audit_log`.
+- **Browser protections:** a strict Content Security Policy (scripts and styles only from the CRM itself, no framing, no plugins), plus `nosniff`, `Referrer-Policy` and cross-origin isolation headers. HTTPS with HSTS via Caddy.
+- **Audit log:** sign-ins, money, status changes, verifications, approvals, user and team changes, file uploads and views are recorded, each in the same transaction as the change it records. Admins can search and export it under **Audit log**, with phone numbers, emails, PINs and hashes masked.
+- **At rest:** the database and uploaded files rely on the server's disk protection; backups are encrypted (see Operations). Use full-disk encryption on the server.
+
+**Personal data.** The CRM holds names, phone numbers, emails, GPS locations, KRA PINs, registration details and KYC documents. When an unactivated individual is deleted after 30 days, a deletion record with their name and phone is kept so conversion rates stay correct; mention this in the privacy notice. Lead lists and statements are client data and are never kept in the repository.
 
 ---
 
@@ -247,7 +265,7 @@ The file's column headings are recognised in common wordings.
 git clone <repository> /opt/switchlink-crm
 cd /opt/switchlink-crm
 cp .env.example .env        # complete the settings below
-docker compose up -d --build
+scripts/release.sh          # builds and starts everything, stamping the version
 docker compose run --rm tools npm run user:create-admin -- "Full Name" admin@switchlinkafrica.com
 ```
 
@@ -265,17 +283,27 @@ from **Teams** and **People**.
 | `POSTGRES_PASSWORD` | Database password. Use a long random value. |
 | `CRM_DOMAIN` | Public domain name, e.g. `crm.switchlinkafrica.com`. |
 | `APP_URL` | Public address, e.g. `https://crm.switchlinkafrica.com`. |
-| `APP_TIMEZONE` | Business timezone for dates and reporting periods. Default `Africa/Nairobi`. |
 | `GEOCODER` | `nominatim` (free, default), `google` (requires `GOOGLE_MAPS_API_KEY`) or `off`. |
 | `GEOCODER_CONTACT_EMAIL` | Contact address sent to OpenStreetMap, as its usage policy requires. |
 | `STORAGE_DIR` | Location of uploaded files. Set automatically in Docker. |
 | `SECURE_COOKIES` | `true` behind HTTPS. Set automatically in Docker. |
+| `BACKUP_PASSPHRASE` | Encrypts every backup. Keep a copy somewhere safe **off** the server: without it backups can't be restored. |
+| `RCLONE_REMOTE` | Off-site copy of each backup (Google Drive, OneDrive, S3, SFTP…), e.g. `gdrive:switchlink-crm-backups`. Configure once with rclone (see Operations). |
+| `BACKUP_KEEP_DAYS` | Local backups to keep. Default 30. |
+| `ALERT_WEBHOOK_URL` | Optional webhook (Slack, Teams, Google Chat, ntfy) told when a backup fails. |
+| `HEALTH_TOKEN` | Lets an uptime monitor read the detailed health checks (16+ random characters). |
+| `CLAMAV_HOST` | Optional: `clamav` to virus-scan KYC uploads (start the scanner with `docker compose --profile antivirus up -d`). |
+
+All dates, report periods and weekly targets use Kenya time (Africa/Nairobi). This is fixed, not a setting.
 
 ### Importing a lead list
 
-A corporate lead list can be loaded in one step. The list supplied by Lindsey
-Erodanga's team is included as `data/corporates-lindsey-sharon.json` (80
-corporates).
+A corporate lead list can be loaded in one step. Lead lists contain client
+contact details, so they are **not** kept in the repository or the Docker
+image: keep the file on the server, readable only by administrators (for
+example `/opt/switchlink-private/corporates-lindsey-sharon.json`, `chmod 600`),
+and pass its path with `--file`. Delete it after a successful import if it's
+no longer needed.
 
 **Before you run it,** create both people in **People**:
 - Lindsey Erodanga as a Team Leader on her team;
@@ -284,9 +312,11 @@ corporates).
 **Then run:**
 
 ```bash
-npm run import:corporates -- --dry-run     # preview, saves nothing
-npm run import:corporates                  # add the corporates
-# on the server: docker compose run --rm tools npm run import:corporates
+npm run import:corporates -- --file /path/to/leads.json --dry-run   # preview, saves nothing
+npm run import:corporates -- --file /path/to/leads.json             # add the corporates
+# on the server:
+docker compose run --rm -v /opt/switchlink-private/leads.json:/leads.json:ro tools \
+  npm run import:corporates -- --file /leads.json
 ```
 
 **What it does:**
@@ -301,23 +331,50 @@ other lists in the same format.
 
 ### Operations
 
-**Backups.** `scripts/backup.sh` saves the database and uploaded files to
-`./backups` and keeps 30 days of history.
-- Schedule it nightly with cron; the script header contains the cron line.
-- Copy the backups to separate storage.
-- Test a restore periodically.
+**Backups (automatic).** The `backup` service backs up the database and all
+uploaded files every night at 01:30 (Kenya time) into `./backups`. Each run:
+1. dumps the database and archives the uploaded files, then reads both back to make sure they're usable;
+2. encrypts them (AES-256) when `BACKUP_PASSPHRASE` is set;
+3. copies them off the server when `RCLONE_REMOTE` is set;
+4. deletes local copies older than `BACKUP_KEEP_DAYS`;
+5. records the result in `backups/last-success.json` (or `last-failure.json`, and posts to `ALERT_WEBHOOK_URL`).
+
+To set up the off-site copy once: `docker run --rm -it -v ./rclone:/config/rclone rclone/rclone config`,
+then set `RCLONE_REMOTE` in `.env` and run `docker compose up -d backup`. To back up right now: `scripts/backup.sh`.
+
+**Restore drill (monthly).** `scripts/restore-drill.sh` restores the newest
+backup into a throwaway database, without touching the live CRM, and checks the
+migrations, the main tables and every KYC file against its fingerprint. The
+result is saved in `backups/last-drill.json`.
+
+**Restoring for real.** `scripts/restore.sh backups/crm-<stamp>.dump.enc backups/storage-<stamp>.tgz.enc --yes`
+replaces the live database and files with that backup (the app is stopped meanwhile).
+
+**Monitoring.** `GET /api/health` returns `{ status, version, commit }` (HTTP
+503 if the database is down) and is used by Docker's health check. Signed-in
+Admins, or a monitor sending `Authorization: Bearer <HEALTH_TOKEN>`, also see
+database, migrations, file storage, hourly housekeeping, backup age and the last
+restore drill. The status is `degraded` when the last good backup is over 36
+hours old or no restore drill has passed in 40 days, and the Admin dashboard
+lists the problem. Point a free uptime monitor (e.g. Uptime Kuma on another
+machine) at `/api/health`.
+
+**Housekeeping (hourly, automatic).** Deletes individuals not activated within
+30 days, expired bulk-upload checks, expired sessions and old sign-in and
+request records. The last run is shown in the health check.
+
+**Audit log.** Admins: **More → Audit log**, filter by action, person, record or
+date, and export to CSV (exports are themselves logged).
+
+**Releases.** `scripts/release.sh` builds and starts a release. The version
+(from `package.json`) and git commit appear under **More** and in
+`/api/health`. Container logs are capped at 100 MB per service.
 
 **Updates.**
 
 ```bash
 git pull
-docker compose up -d --build
-```
-
-**Restore.**
-
-```bash
-docker compose exec -T db pg_restore -U crm -d crm --clean < backups/crm-<date>.dump
+scripts/release.sh
 ```
 
 ---
@@ -355,13 +412,15 @@ npm run dev                       # http://localhost:3000
 | `npm run dev` | Development server |
 | `npm run build` / `npm start` | Production build and server |
 | `npm test` | Unit tests |
-| `npm run test:db` | Database tests (ledger, statements, team moves, migrations) on a temporary database; needs PostgreSQL and `pip install xlrd xlwt` |
+| `npm run test:db` | Database tests (ledger, statements, team moves, phones, throttling, idempotency, migrations) on a temporary database; needs PostgreSQL and `pip install xlrd xlwt` |
 | `npm run typecheck` | TypeScript checks |
 | `npm run db:migrate` | Apply pending migrations |
 | `npm run db:generate -- --name <change>` | Generate a migration after editing the schema |
 | `npm run db:seed` | Create the initial Admin account |
 | `npm run user:create-admin -- "Name" email` | Create an Admin with a random temporary password |
-| `npm run import:corporates` | Import a corporate lead list (see Importing a lead list) |
+| `npm run import:corporates -- --file <path>` | Import a corporate lead list (see Importing a lead list) |
+| `scripts/release.sh` | Build and start a release on the server |
+| `scripts/backup.sh` / `scripts/restore-drill.sh` / `scripts/restore.sh` | Back up now / test a restore / restore |
 
 ### Database changes
 
@@ -383,16 +442,22 @@ Existing migrations must never be edited.
 | `src/lib/reports.ts` | Reporting queries |
 | `src/lib/targets.ts`, `src/lib/targets-data.ts` | Weekly target rules and progress queries |
 | `src/lib/retention.ts` | Automatic removal of individuals not activated in time |
+| `src/lib/maintenance.ts`, `src/lib/health.ts` | Hourly housekeeping; health report |
+| `src/lib/auth/api.ts`, `src/lib/auth/throttle.ts` | API access check; sign-in throttle |
+| `src/lib/ledger.ts`, `src/lib/idempotency.ts` | Reversals; once-only money writes |
+| `src/lib/files.ts`, `src/lib/av.ts`, `src/lib/storage.ts` | KYC content checks, virus scan, private file storage |
+| `src/lib/csv.ts`, `src/lib/phone.ts` | Safe CSV cells; Kenyan phone numbers |
 | `src/lib/statements/` | Statement analysis and import |
 | `tools/parse_statement.py` | Pesi statement reader |
 | `drizzle/` | Database migrations |
-| `scripts/` | Migration, seeding, admin creation and backup scripts |
-| `tests/` | Unit tests |
+| `scripts/` | Migration, seeding, admin creation, backup, restore and release scripts |
+| `tests/` | Unit tests; `tests/db/` database tests |
 
 ### Tests
 
 ```bash
-npm test
+npm test          # rules and security checks, no database needed
+npm run test:db   # against a temporary PostgreSQL database
 ```
 
 Two statement tests use real Pesi statements, which are client data and

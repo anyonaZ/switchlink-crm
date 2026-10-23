@@ -124,13 +124,16 @@ export async function cancelShare(shareId: string): Promise<ActionResult> {
   const members = await db.select({ userId: t.accountShareMembers.userId }).from(t.accountShareMembers).where(eq(t.accountShareMembers.shareId, shareId));
   const involved = share.requestedBy === me.id || members.some((m) => m.userId === me.id);
   if (!(me.role === "ADMIN" || (me.role === "BDO" && involved))) return fail("Only the BDOs on the request or an Admin can withdraw it.");
-  const updated = await db
-    .update(t.accountShares)
-    .set({ status: "CANCELLED", decidedAt: new Date() })
-    .where(and(eq(t.accountShares.id, shareId), eq(t.accountShares.status, "PENDING")))
-    .returning({ id: t.accountShares.id });
+  const updated = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(t.accountShares)
+      .set({ status: "CANCELLED", decidedAt: new Date() })
+      .where(and(eq(t.accountShares.id, shareId), eq(t.accountShares.status, "PENDING")))
+      .returning({ id: t.accountShares.id });
+    if (rows.length) await audit(me.id, "share.cancel", "account", share.accountId, { shareId }, tx);
+    return rows;
+  });
   if (!updated.length) return fail("Only a request that's still waiting can be withdrawn.");
-  await audit(me.id, "share.cancel", "account", share.accountId, { shareId });
   touch(share.accountId);
   return ok("Request withdrawn.");
 }
@@ -140,13 +143,16 @@ export async function endShare(shareId: string, reason = ""): Promise<ActionResu
   const me = await requireUser();
   if (me.role !== "ADMIN") return fail("Only Admins can end a share.");
   if (!reason.trim()) return fail("Give a reason for ending the share.");
-  const updated = await db
-    .update(t.accountShares)
-    .set({ status: "ENDED", endedAt: new Date(), endedBy: me.id })
-    .where(and(eq(t.accountShares.id, shareId), eq(t.accountShares.status, "APPROVED")))
-    .returning({ accountId: t.accountShares.accountId });
+  const updated = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(t.accountShares)
+      .set({ status: "ENDED", endedAt: new Date(), endedBy: me.id })
+      .where(and(eq(t.accountShares.id, shareId), eq(t.accountShares.status, "APPROVED")))
+      .returning({ accountId: t.accountShares.accountId });
+    if (rows.length) await audit(me.id, "share.end", "account", rows[0].accountId, { shareId, reason: reason.trim().slice(0, 300) }, tx);
+    return rows;
+  });
   if (!updated.length) return fail("That share isn't active.");
-  await audit(me.id, "share.end", "account", updated[0].accountId, { shareId, reason: reason.trim().slice(0, 300) });
   touch(updated[0].accountId);
   return ok("Share ended. New disbursements go to the account's own agent again.");
 }
