@@ -8,3 +8,4 @@ tests
 *.log
 data
 rclone
+HANDOFF.md

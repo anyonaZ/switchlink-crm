@@ -16,3 +16,6 @@ backups/
 data/
 *.xls
 rclone/
+
+# Internal handoff notes: kept privately, never in the repository.
+HANDOFF.md
